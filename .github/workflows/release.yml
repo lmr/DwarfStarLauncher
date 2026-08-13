@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build & Release
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Build release binary
+        run: swift build -c release
+
+      - name: Package .app bundle
+        run: bash scripts/package.sh
+
+      - name: Create DMG
+        run: bash scripts/package.sh --dmg
+
+      - name: Upload assets to release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            DwarfStarLauncher.app
+            DwarfStarLauncher.dmg
+          generate_release_notes: true
+          fail_on_unmatched_files: true
