@@ -60,6 +60,12 @@ struct LogView: View {
                             Label("Copy", systemImage: "doc.on.doc")
                         }
 
+                        Button {
+                            serverManager.clearLogs()
+                        } label: {
+                            Label("Clear", systemImage: "trash")
+                        }
+
                     }
                     .padding(DesignTokens.Spacing.s2)
                     .background(DesignTokens.cardSurface, in: RoundedRectangle(cornerRadius: DesignTokens.Radii.s))

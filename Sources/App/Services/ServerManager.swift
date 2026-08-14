@@ -12,6 +12,19 @@ final class ServerManager: @unchecked Sendable {
     private var stdoutHandle: FileHandle?
     private var stderrHandle: FileHandle?
 
+    /// Maximum number of log lines retained in memory. Prevents an unbounded
+    /// `logLines` array from leaking memory on long-running servers.
+    private static let logLineLimit = 10_000
+
+    /// Appends a log line and trims the oldest entries once the cap is exceeded.
+    /// Internal (not private) so tests can exercise the cap without spawning a process.
+    func appendLogLine(_ line: LogLine) {
+        logLines.append(line)
+        if logLines.count > Self.logLineLimit {
+            logLines.removeFirst(logLines.count - Self.logLineLimit)
+        }
+    }
+
     init(statusMonitor: StatusMonitor) {
         self.statusMonitor = statusMonitor
         loadConfig()
@@ -41,7 +54,7 @@ final class ServerManager: @unchecked Sendable {
         proc.currentDirectoryURL = PathResolver.dataRoot
         let processCmdLine = "\(PathResolver.serverBinary.lastPathComponent) \(procArgs.joined(separator: " "))"
         let logLine = LogLine(timestamp: Date(), text: processCmdLine, level: .info)
-        self.logLines.append(logLine)
+        self.appendLogLine(logLine)
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
         proc.standardOutput = stdoutPipe
@@ -59,7 +72,7 @@ final class ServerManager: @unchecked Sendable {
             DispatchQueue.main.async {
                 for line in lines {
                     let logLine = LogLine(timestamp: Date(), text: line, level: self.classify(line))
-                    self.logLines.append(logLine)
+                    self.appendLogLine(logLine)
                     self.statusMonitor.parse(line)
 
                     if line.contains("shutdown requested") {
@@ -78,7 +91,7 @@ final class ServerManager: @unchecked Sendable {
             DispatchQueue.main.async {
                 for line in lines {
                     let logLine = LogLine(timestamp: Date(), text: line, level: self.classify(line))
-                    self.logLines.append(logLine)
+                    self.appendLogLine(logLine)
                     self.statusMonitor.parse(line)
 
                     if line.contains("listening on http") {
@@ -112,7 +125,7 @@ final class ServerManager: @unchecked Sendable {
         } catch {
             status = .error(exitCode: -1)
             let logLine = LogLine(timestamp: Date(), text: "Failed to launch: \(error.localizedDescription)", level: .error)
-            logLines.append(logLine)
+            appendLogLine(logLine)
         }
     }
 

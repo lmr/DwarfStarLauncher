@@ -99,4 +99,15 @@ final class ServerManagerTests: XCTestCase {
     func testClassifyInfoFallback() {
         XCTAssertEqual(manager.classify("server listening on port 1234"), .info)
     }
+
+    func testLogLinesAreCappedAtLimit() {
+        let manager = ServerManager(statusMonitor: StatusMonitor())
+        for i in 0..<12_000 {
+            manager.appendLogLine(LogLine(timestamp: Date(), text: "line \(i)", level: .info))
+        }
+        XCTAssertEqual(manager.logLines.count, 10_000)
+        XCTAssertEqual(manager.logLines.last?.text, "line 11999")
+        // The oldest lines were trimmed away, keeping the most recent 10k.
+        XCTAssertEqual(manager.logLines.first?.text, "line 2000")
+    }
 }

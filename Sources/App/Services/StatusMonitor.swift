@@ -34,12 +34,17 @@ final class StatusMonitor {
         return Double(used) / Double(total) * 100
     }
 
+    // Precompiled once rather than rebuilt on every log line (these patterns are
+    // static literals, so the `try!` is safe and only runs at class initialization).
+    private static let prefillPattern = try! NSRegularExpression(pattern: #"chunk=[\d.]+\s*t/s\s+avg=([\d.]+)\s*t/s"#)
+    private static let generationPattern = try! NSRegularExpression(pattern: #"decoding\s+chunk=[\d.]+\s*t/s\s+avg=([\d.]+)\s*t/s"#)
+    private static let contextPattern = try! NSRegularExpression(pattern: #"ctx=(\d+)\.\.(\d+):(\d+)"#)
+
     func parse(_ line: String) {
         // Prefill: lines contain "prefill" and "chunk=X.XX t/s"
         if line.localizedCaseInsensitiveContains("prefill") {
-            let chunkPattern = try! NSRegularExpression(pattern: #"chunk=[\d.]+\s*t/s\s+avg=([\d.]+)\s*t/s"#)
             let range = NSRange(line.startIndex..., in: line)
-            if let match = chunkPattern.firstMatch(in: line, range: range),
+            if let match = Self.prefillPattern.firstMatch(in: line, range: range),
                let value = Double(line[Range(match.range(at: 1), in: line)!]) {
                 prefillTokensPerSecond = value
                 generationTokensPerSecond = 0
@@ -48,9 +53,8 @@ final class StatusMonitor {
         }
 
         // Generation: "decoding chunk=X.XX t/s"
-        let genPattern = try! NSRegularExpression(pattern: #"decoding\s+chunk=[\d.]+\s*t/s\s+avg=([\d.]+)\s*t/s"#)
         let genRange = NSRange(line.startIndex..., in: line)
-        if let match = genPattern.firstMatch(in: line, range: genRange),
+        if let match = Self.generationPattern.firstMatch(in: line, range: genRange),
            let value = Double(line[Range(match.range(at: 1), in: line)!]) {
             generationTokensPerSecond = value
             prefillTokensPerSecond = 0
@@ -58,9 +62,8 @@ final class StatusMonitor {
         }
 
         // Context: "ctx=START..END:USED" — use maxContext as total
-        let ctxPattern = try! NSRegularExpression(pattern: #"ctx=(\d+)\.\.(\d+):(\d+)"#)
         let ctxRange = NSRange(line.startIndex..., in: line)
-        if let match = ctxPattern.firstMatch(in: line, range: ctxRange),
+        if let match = Self.contextPattern.firstMatch(in: line, range: ctxRange),
            let end = Int(line[Range(match.range(at: 2), in: line)!]) {
             contextUsed = end
             contextTotal = maxContext

@@ -32,6 +32,21 @@ final class ModelDownloader: NSObject, URLSessionDataDelegate {
     // Expected total size resolved from Hugging Face at download start (not the
     // hardcoded catalog value, which is wrong for some targets).
     private var expectedTotalSize: Int64 = 0
+    // Multi-file bookkeeping: whether the active download spans several files,
+    // which file is being fetched, and the bytes already written to completed
+    // files (used to report overall progress across the whole target).
+    private var isMultiFile = false
+    private var currentFileIndex = 0
+    private var multiFileCumulativeBytes: Int64 = 0
+    // Expected size of the file currently being fetched. For multi-file targets
+    // this is the per-file size (not the whole-target sum) so integrity checks
+    // compare each file against its own expected size.
+    private var currentFileExpectedSize: Int64 = 0
+    // Local file names (under the models dir) whose full catalog size is present
+    // on disk. This is the in-memory source of truth for "already downloaded" —
+    // the catalog's `ModelFile.downloaded` flag is never mutated, so views must
+    // not read it. Refreshed on a background queue; updated immediately on rename.
+    private var downloadedFiles: Set<String> = []
 
     private static var oidCacheURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -59,18 +74,66 @@ final class ModelDownloader: NSObject, URLSessionDataDelegate {
         self.huggingFaceClient = huggingFaceClient
         super.init()
         loadOidCache()
+        refreshDownloadedFiles()
+    }
+
+    // MARK: - Downloaded-state (in-memory, background-refreshed)
+
+    /// Scans the models directory on a background queue and records which
+    /// catalog files are already fully on disk. Views read `isDownloaded` /
+    /// `downloadedFileCount` which hit this set — never the disk.
+    func refreshDownloadedFiles() {
+        let complete = completedFileNames()
+        Task { @MainActor in
+            self.downloadedFiles = complete
+        }
+    }
+
+    private func completedFileNames() -> Set<String> {
+        let fm = FileManager.default
+        let modelsDir = PathResolver.modelsDir
+        var result: Set<String> = []
+        for target in DownloadTarget.allCases {
+            for file in target.files {
+                let url = modelsDir.appendingPathComponent(file.localName)
+                guard fm.fileExists(atPath: url.path),
+                      let attrs = try? fm.attributesOfItem(atPath: url.path),
+                      let size = attrs[.size] as? Int64,
+                      size == file.size else { continue }
+                result.insert(file.localName)
+            }
+        }
+        return result
+    }
+
+    /// True when every file of the target is present on disk at full size.
+    func isDownloaded(_ target: DownloadTarget) -> Bool {
+        target.files.allSatisfy { downloadedFiles.contains($0.localName) }
+    }
+
+    func downloadedFileCount(for target: DownloadTarget) -> Int {
+        target.files.reduce(0) { $0 + (downloadedFiles.contains($1.localName) ? 1 : 0) }
     }
 
     // MARK: - Download
 
     func download(target: DownloadTarget) {
-        guard task == nil, !isStartingDownload else { return }
+        // `currentTarget != nil` also guards the multi-file gap between files,
+        // where `task` is nil but a download is still in progress.
+        guard task == nil, currentTarget == nil, !isStartingDownload else { return }
         isStartingDownload = true
 
         Task { @MainActor in
             defer { isStartingDownload = false }
-            let resolvedSize = await resolveExpectedSize(for: target)
-            startDownload(target: target, expectedSize: resolvedSize)
+            if target.files.count > 1 {
+                // Multi-shard targets (e.g. GLM 11 shards, PRO 2-file split)
+                // download each file through the same delegate-driven engine,
+                // sequenced one after the other.
+                await downloadMultiFileAsync(target: target)
+            } else {
+                let resolvedSize = await resolveExpectedSize(for: target)
+                startDownload(target: target, expectedSize: resolvedSize)
+            }
         }
     }
 
@@ -78,8 +141,12 @@ final class ModelDownloader: NSObject, URLSessionDataDelegate {
     private func startDownload(target: DownloadTarget, expectedSize: Int64) {
         currentTarget = target
         let files = target.files
-        let partURL = PathResolver.partFileURL(for: files.first?.localName ?? target.rawValue)
+        let file = files[currentFileIndex]
+        let partURL = PathResolver.partFileURL(for: file.localName)
         self.partURL = partURL
+        // Per-file expected size: resolved single-file size for single-file
+        // targets; the catalog size per file for multi-file targets.
+        currentFileExpectedSize = isMultiFile ? file.size : expectedSize
 
         // Determine resume offset
         var offset: Int64 = 0
@@ -101,7 +168,7 @@ final class ModelDownloader: NSObject, URLSessionDataDelegate {
         speedWindow = [(Date(), offset)]
         lastProgressUpdate = nil
 
-        let hfURL = buildHFDownloadURL(target: target, file: files.first)
+        let hfURL = buildHFDownloadURL(target: target, file: file)
         var request = URLRequest(url: hfURL)
         request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
 
@@ -135,9 +202,12 @@ final class ModelDownloader: NSObject, URLSessionDataDelegate {
         task = session.dataTask(with: request)
         task?.resume()
 
+        // For multi-file targets, overall progress accounts for the bytes already
+        // written to completed files plus this file's resume offset.
+        let overallBytes = multiFileCumulativeBytes + totalBytes
         downloadState = .progress(
-            percent: totalBytes > 0 ? Double(offset) / Double(expectedSize) * 100 : 0,
-            bytesDownloaded: offset,
+            percent: overallBytes > 0 ? Double(overallBytes) / Double(expectedSize) * 100 : 0,
+            bytesDownloaded: overallBytes,
             totalBytes: expectedSize,
             speedBytesPerSec: 0,
             etaSeconds: 0
@@ -191,154 +261,33 @@ final class ModelDownloader: NSObject, URLSessionDataDelegate {
         }
     }
 
-    func downloadMultiFile(target: DownloadTarget) {
-        Task {
-            await downloadMultiFileAsync(target: target)
-        }
-    }
-
+    /// Downloads a multi-file target by feeding each file through the same
+    /// delegate-driven engine used for single-file targets, one file at a time.
+    /// `didCompleteWithError` advances `currentFileIndex` and starts the next
+    /// file, so this coordinator only sets up the first one.
+    @MainActor
     private func downloadMultiFileAsync(target: DownloadTarget) async {
         let files = target.files
         guard !files.isEmpty else { return }
 
         currentTarget = target
-        self.expectedTotalSize = await resolveExpectedSize(for: target)
+        isMultiFile = true
+        currentFileIndex = 0
+        multiFileCumulativeBytes = 0
+        expectedTotalSize = await resolveExpectedSize(for: target)
 
-        for (index, file) in files.enumerated() {
-            guard !isCancelled else { return }
-
-            do {
-                let (resolvedPath, downloadUrl) = try await resolveFileForDownload(repo: target.repo, file: file)
-
-                // Check for resume
-                let partURL = PathResolver.partFileURL(for: file.localName)
-                var offset: Int64 = 0
-                if FileManager.default.fileExists(atPath: partURL.path) {
-                    let attrs = try? FileManager.default.attributesOfItem(atPath: partURL.path)
-                    let partSize = (attrs?[FileAttributeKey.size] as? Int64) ?? 0
-                    if partSize > 0 {
-                        offset = partSize
-                    } else {
-                        try? FileManager.default.removeItem(at: partURL)
-                    }
-                }
-
-                // Resolve the actual download URL (handle LFS redirect)
-                let finalUrl = try await resolveActualDownloadUrl(
-                    repo: target.repo,
-                    path: resolvedPath.path,
-                    fileUrl: downloadUrl,
-                    resumeOffset: offset
-                )
-
-                // Download the file
-                try await downloadFile(from: finalUrl, to: partURL, resumeOffset: offset, targetFile: file, currentIndex: index, totalFiles: files.count, target: target)
-
-                // Mark as downloaded
-                // (In a real implementation, we'd track per-file state)
-
-            } catch {
-                currentTarget = nil
-                self.downloadState = .error(message: "Failed to download \(file.remoteName): \(error.localizedDescription)")
-                self.onDownloadError?(error.localizedDescription)
-                return
-            }
-        }
-
-        // All files downloaded
-        currentTarget = target
-        self.downloadState = .complete
-        self.onDownloadComplete?(target)
-    }
-
-    private func resolveFileForDownload(repo: String, file: ModelFile) async throws -> (ResolvedFilePath, DownloadUrl) {
-        let resolvedPath = try await huggingFaceClient.resolveFilePath(repo: repo, path: file.remoteName)
-        let downloadUrl = try await huggingFaceClient.resolveDownloadUrl(repo: repo, path: file.remoteName)
-        return (resolvedPath, downloadUrl)
-    }
-
-    private func resolveActualDownloadUrl(repo: String, path: String, fileUrl: DownloadUrl, resumeOffset: Int64) async throws -> URL {
-        // If the file has LFS info with a presigned URL, use it
-        if let lfsUrl = fileUrl.lfs?.url, !lfsUrl.isEmpty {
-            return URL(string: lfsUrl)!
-        }
-
-        // Otherwise use the resolved URL
-        let resolveUrl = URL(string: "https://huggingface.co/\(repo)/resolve/main/\(path)")!
-        return resolveUrl
-    }
-
-    private func downloadFile(from url: URL, to fileURL: URL, resumeOffset: Int64, targetFile: ModelFile, currentIndex: Int, totalFiles: Int, target: DownloadTarget) async throws {
-        var request = URLRequest(url: url)
-        request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
-
-        if let token = resolveToken() {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
-
-        if resumeOffset > 0 {
-            request.setValue("bytes=\(resumeOffset)-", forHTTPHeaderField: "Range")
-        }
-
-        let config = URLSessionConfiguration.default
-        config.timeoutIntervalForResource = 7 * 86400
-        let session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
-
-        let (asyncBytes, response) = try await session.bytes(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse, (httpResponse.statusCode == 200 || httpResponse.statusCode == 206) else {
-            try? FileManager.default.removeItem(at: fileURL)
-            throw HFClientError.fileNotFound
-        }
-
-        if !FileManager.default.fileExists(atPath: fileURL.path) {
-            FileManager.default.createFile(atPath: fileURL.path, contents: nil)
-        }
-        guard let fileHandle = try? FileHandle(forWritingTo: fileURL) else {
-            return
-        }
-        if resumeOffset > 0 {
-            _ = try? fileHandle.seekToEnd()
-        }
-        // Stream received bytes to the .part file incrementally (memory-bounded).
-        // AsyncBytes yields individual bytes; buffer them and flush in bounded chunks.
-        var buffer = Data()
-        var bytesWritten: Int64 = 0
-        for try await byte in asyncBytes {
-            buffer.append(byte)
-            if buffer.count >= 1024 * 1024 {
-                fileHandle.write(buffer)
-                bytesWritten += Int64(buffer.count)
-                buffer = Data()
-            }
-        }
-        if !buffer.isEmpty {
-            fileHandle.write(buffer)
-            bytesWritten += Int64(buffer.count)
-        }
-        try? fileHandle.close()
-
-        // Update progress
-        let fileProgress = Double(currentIndex + 1) / Double(totalFiles)
-        let overallProgress = fileProgress * 100.0
-        DispatchQueue.main.async {
-            self.downloadState = .progress(
-                percent: overallProgress,
-                bytesDownloaded: bytesWritten,
-                totalBytes: self.expectedTotalSize,
-                speedBytesPerSec: 0,
-                etaSeconds: 0
-            )
-        }
+        startDownload(target: target, expectedSize: expectedTotalSize)
     }
 
     // MARK: - Cancel
 
     func cancel() {
-        guard let t = task else { return }
+        // Always mark cancelled first: the active single-file task may be nil
+        // (multi-file downloads never assign `task`), so the flag is what stops
+        // the next file from starting and lets the in-flight file abort cleanly.
         isCancelled = true
         currentTarget = nil
-        t.cancel()
+        task?.cancel()
         cleanup()
         downloadState = .idle
     }
@@ -416,18 +365,30 @@ final class ModelDownloader: NSObject, URLSessionDataDelegate {
 
     // MARK: - Cleanup
 
-    private func cleanup() {
+    /// Clears state that belongs to a single file's transfer. Keeps
+    /// `expectedTotalSize`, `isMultiFile`, `currentFileIndex`,
+    /// `multiFileCumulativeBytes`, and `currentFileExpectedSize` so the next
+    /// file in a multi-file download can continue.
+    private func resetPerFileState() {
         task = nil
         session = nil
         outputFile = nil
         partURL = nil
         bytesReceived = 0
         totalBytes = 0
-        expectedTotalSize = 0
         startTime = nil
         speedWindow = []
-        isStartingDownload = false
         lastProgressUpdate = nil
+    }
+
+    private func cleanup() {
+        resetPerFileState()
+        expectedTotalSize = 0
+        currentFileExpectedSize = 0
+        isMultiFile = false
+        currentFileIndex = 0
+        multiFileCumulativeBytes = 0
+        isStartingDownload = false
     }
 }
 
@@ -483,9 +444,12 @@ extension ModelDownloader {
         }
 
         let expectedSize = self.expectedTotalSize
+        // For multi-file targets, overall progress includes bytes already
+        // written to completed files plus this file's bytes so far.
+        let overallBytes = self.multiFileCumulativeBytes + self.totalBytes
         let eta: Int
         if speed > 0 {
-            let remaining = max(expectedSize - totalBytes, 0)
+            let remaining = max(expectedSize - overallBytes, 0)
             eta = Int(remaining / speed)
         } else {
             eta = 0
@@ -501,8 +465,8 @@ extension ModelDownloader {
 
         DispatchQueue.main.async {
             self.downloadState = .progress(
-                percent: Double(self.totalBytes) / Double(expectedSize) * 100,
-                bytesDownloaded: self.totalBytes,
+                percent: Double(overallBytes) / Double(expectedSize) * 100,
+                bytesDownloaded: overallBytes,
                 totalBytes: expectedSize,
                 speedBytesPerSec: speed,
                 etaSeconds: eta
@@ -513,17 +477,23 @@ extension ModelDownloader {
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         DispatchQueue.main.async {
             let partURL = self.partURL
-            let expectedSize = self.expectedTotalSize
             let target = partURL.flatMap { url in
-                self.availableTargets.first { $0.filename == url.lastPathComponent.replacingOccurrences(of: ".part", with: "") }
+                let localName = url.lastPathComponent.replacingOccurrences(of: ".part", with: "")
+                return self.availableTargets.first { target in
+                    target.files.contains { $0.localName == localName }
+                }
             }
 
-            self.cleanup()
-            self.currentTarget = nil
-
-            guard !self.isCancelled else { return }
+            // Terminal cancellation: tear down and exit without surfacing an error.
+            guard !self.isCancelled else {
+                self.cleanup()
+                self.currentTarget = nil
+                return
+            }
 
             if let error = error as NSError? {
+                self.cleanup()
+                self.currentTarget = nil
                 if error.domain == NSURLErrorDomain, error.code == NSURLErrorCancelled {
                     return
                 }
@@ -534,6 +504,8 @@ extension ModelDownloader {
             }
 
             guard let partURL = partURL else {
+                self.cleanup()
+                self.currentTarget = nil
                 let msg = "Internal error: missing file path"
                 self.downloadState = .error(message: msg)
                 self.onDownloadError?(msg)
@@ -541,15 +513,20 @@ extension ModelDownloader {
             }
 
             guard let target = target else {
+                self.cleanup()
+                self.currentTarget = nil
                 let msg = "Unknown download target"
                 self.downloadState = .error(message: msg)
                 self.onDownloadError?(msg)
                 return
             }
 
-            // Integrity check (with optional SHA256 verification if we have a cached OID)
-            let oidKey = target.files.first.map { "\(target.repo)/\($0.remoteName)" }
-            guard self.checkIntegrity(at: partURL, expectedSize: expectedSize, oidKey: oidKey) else {
+            // Integrity check against this file's expected size (plus optional OID).
+            let file = target.files[self.currentFileIndex]
+            let oidKey = "\(target.repo)/\(file.remoteName)"
+            guard self.checkIntegrity(at: partURL, expectedSize: self.currentFileExpectedSize, oidKey: oidKey) else {
+                self.cleanup()
+                self.currentTarget = nil
                 try? FileManager.default.removeItem(at: partURL)
                 let msg = "Integrity check failed: size or magic header mismatch"
                 self.downloadState = .failed(reason: msg)
@@ -558,16 +535,32 @@ extension ModelDownloader {
             }
 
             // Rename .part -> .gguf
-            let finalURL = PathResolver.modelsDir.appendingPathComponent(target.filename)
+            let finalURL = PathResolver.modelsDir.appendingPathComponent(file.localName)
             do {
                 try FileManager.default.moveItem(at: partURL, to: finalURL)
+                self.downloadedFiles.insert(file.localName)
             } catch {
+                self.cleanup()
+                self.currentTarget = nil
                 let msg = "Failed to finalize download: \(error.localizedDescription)"
                 self.downloadState = .error(message: msg)
                 self.onDownloadError?(msg)
                 return
             }
 
+            // Multi-file target: advance to the next file, keeping currentTarget set.
+            if self.isMultiFile {
+                self.multiFileCumulativeBytes += self.totalBytes
+                self.currentFileIndex += 1
+                if self.currentFileIndex < target.files.count {
+                    self.resetPerFileState()
+                    self.startDownload(target: target, expectedSize: self.expectedTotalSize)
+                    return
+                }
+            }
+
+            self.cleanup()
+            self.currentTarget = nil
             self.downloadState = .complete
             self.onDownloadComplete?(target)
         }

@@ -14,7 +14,7 @@ struct DownloadsView: View {
 
     private var hasCompletedDownloads: Bool {
         modelDownloader.availableTargets.contains { target in
-            target.files.allSatisfy { $0.downloaded }
+            modelDownloader.isDownloaded(target)
         }
     }
 
@@ -209,9 +209,8 @@ struct DownloadsView: View {
     // MARK: - File Status Row
 
     private func fileStatusRow(for target: DownloadTarget) -> some View {
-        let files = target.files
-        let downloadedCount = files.filter { $0.downloaded }.count
-        let totalCount = files.count
+        let downloadedCount = modelDownloader.downloadedFileCount(for: target)
+        let totalCount = target.files.count
 
         if downloadedCount < totalCount {
             return AnyView(
@@ -333,8 +332,9 @@ extension ModelDownloader {
         if currentTarget == target {
             return downloadState
         }
-        // Check if all files for this target are downloaded
-        if target.files.allSatisfy({ $0.downloaded }) {
+        // Check the in-memory downloaded-state (background-refreshed) rather than
+        // the catalog's `downloaded` flag, which is never mutated.
+        if isDownloaded(target) {
             return .complete
         }
         return .idle

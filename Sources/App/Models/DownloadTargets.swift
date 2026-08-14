@@ -151,22 +151,6 @@ enum DownloadTarget: String, CaseIterable, Identifiable, Equatable {
     }
 
     var revision: String? { nil }
-
-    var isDownloaded: Bool {
-        !files.isEmpty && files.allSatisfy { file in
-            let url = PathResolver.modelsDir.appendingPathComponent(file.localName)
-            guard FileManager.default.fileExists(atPath: url.path),
-                  let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
-                  let size = attrs[.size] as? Int64,
-                  size == file.size else { return false }
-            // Verify GGUF magic header for basic integrity (same check used post-download)
-            guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
-            defer { try? handle.close() }
-            let data = handle.readData(ofLength: 4)
-            guard data.count == 4, let magic = String(data: data, encoding: .utf8) else { return false }
-            return ["GGUF", "GGML", "FGGU"].contains(magic)
-        }
-    }
 }
 
 // MARK: - DownloadCategory
