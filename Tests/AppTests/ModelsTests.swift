@@ -52,3 +52,17 @@ final class DownloadStateTests: XCTestCase {
         XCTAssertNotEqual(DownloadState.idle, DownloadState.complete)
     }
 }
+
+final class TokenCountFormatterTests: XCTestCase {
+    func testHumanizesThousandsMillionsAndBillions() {
+        XCTAssertEqual(TokenCountFormatter.humanize(999), "999")
+        XCTAssertEqual(TokenCountFormatter.humanize(1_200), "1.2K")
+        XCTAssertEqual(TokenCountFormatter.humanize(1_200_000), "1.2M")
+        XCTAssertEqual(TokenCountFormatter.humanize(1_200_000_000), "1.2B")
+    }
+
+    func testPromotesRoundedValuesToTheNextUnit() {
+        XCTAssertEqual(TokenCountFormatter.humanize(999_950), "1M")
+        XCTAssertEqual(TokenCountFormatter.humanize(999_950_000), "1B")
+    }
+}

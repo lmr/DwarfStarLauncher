@@ -62,6 +62,10 @@ enum PathResolver {
         configRoot.appendingPathComponent("config.json")
     }
 
+    static var lifetimeMetricsFile: URL {
+        dataRoot.appendingPathComponent("lifetime_metrics.json")
+    }
+
     static var serverBinary: URL {
         binDir.appendingPathComponent("ds4-server")
     }

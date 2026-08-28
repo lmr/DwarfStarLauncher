@@ -24,10 +24,34 @@ final class StatusMonitor {
     var systemMemoryTotalMB: Double? = nil
     var gpuLoadPercent: Double? = nil
 
+    private(set) var lifetimeMetrics: LifetimeMetrics
+
     private(set) var history: [MetricsSnapshot] = []
     private var timer: Timer?
     private var lastPrefillUpdate: Date?
     private var lastGenerationUpdate: Date?
+    private let lifetimeMetricsStore: LifetimeMetricsStore
+    private let lifetimeMetricsPersistenceQueue = DispatchQueue(
+        label: "com.dwarfstarlauncher.lifetime-metrics-persistence",
+        qos: .utility
+    )
+    private var pendingLifetimeMetricsPersistence: DispatchWorkItem?
+
+    private struct PrefillProgress {
+        let contextStart: Int64
+        let total: Int64
+        var current: Int64
+        var didRecord: Bool
+    }
+
+    private var prefillProgress: PrefillProgress?
+    private var lastGenerationTokenCount: Int64?
+    private var lastGenerationElapsedSeconds: Double?
+
+    init(lifetimeMetricsStore: LifetimeMetricsStore = LifetimeMetricsStore()) {
+        self.lifetimeMetricsStore = lifetimeMetricsStore
+        self.lifetimeMetrics = lifetimeMetricsStore.load()
+    }
 
     var contextPercent: Double? {
         guard let used = contextUsed, let total = contextTotal, total > 0 else { return nil }
@@ -39,8 +63,17 @@ final class StatusMonitor {
     private static let prefillPattern = try! NSRegularExpression(pattern: #"chunk=[\d.]+\s*t/s\s+avg=([\d.]+)\s*t/s"#)
     private static let generationPattern = try! NSRegularExpression(pattern: #"decoding\s+chunk=[\d.]+\s*t/s\s+avg=([\d.]+)\s*t/s"#)
     private static let contextPattern = try! NSRegularExpression(pattern: #"ctx=(\d+)\.\.(\d+):(\d+)"#)
+    private static let prefillProgressPattern = try! NSRegularExpression(pattern: #"\bprefill\s+chunk\s+(\d+)\s*/\s*(\d+)"#)
+    private static let generationTokenPattern = try! NSRegularExpression(pattern: #"\bgen=(\d+)\b"#)
+    private static let elapsedSecondsPattern = try! NSRegularExpression(pattern: #"(\d+(?:\.\d+)?)s\s*$"#)
 
     func parse(_ line: String) {
+        if line.localizedCaseInsensitiveContains("prompt start") {
+            prefillProgress = nil
+            lastGenerationTokenCount = nil
+            lastGenerationElapsedSeconds = nil
+        }
+
         // Prefill: lines contain "prefill" and "chunk=X.XX t/s"
         if line.localizedCaseInsensitiveContains("prefill") {
             let range = NSRange(line.startIndex..., in: line)
@@ -50,6 +83,8 @@ final class StatusMonitor {
                 generationTokensPerSecond = 0
                 lastPrefillUpdate = Date()
             }
+
+            recordCompletedPrefillIfNeeded(in: line)
         }
 
         // Generation: "decoding chunk=X.XX t/s"
@@ -60,6 +95,8 @@ final class StatusMonitor {
             prefillTokensPerSecond = 0
             lastGenerationUpdate = Date()
         }
+
+        recordGenerationIfNeeded(in: line)
 
         // Context: "ctx=START..END:USED" — use maxContext as total
         let ctxRange = NSRange(line.startIndex..., in: line)
@@ -86,6 +123,134 @@ final class StatusMonitor {
                 history.removeFirst(history.count - 1000)
             }
         }
+    }
+
+    // MARK: - Lifetime metrics
+
+    private func recordCompletedPrefillIfNeeded(in line: String) {
+        let range = NSRange(line.startIndex..., in: line)
+        guard let progressMatch = Self.prefillProgressPattern.firstMatch(in: line, range: range),
+              let current = Int64(line[Range(progressMatch.range(at: 1), in: line)!]),
+              let total = Int64(line[Range(progressMatch.range(at: 2), in: line)!]),
+              total > 0 else { return }
+
+        let contextRange = Self.contextPattern.firstMatch(in: line, range: range)
+        let contextStart = contextRange.flatMap { Int64(line[Range($0.range(at: 1), in: line)!]) } ?? 0
+        let contextEnd = contextRange.flatMap { Int64(line[Range($0.range(at: 2), in: line)!]) }
+
+        let startsNewPrefill = prefillProgress.map {
+            current == 0
+                || $0.total != total
+                || $0.contextStart != contextStart
+                || current < $0.current
+        } ?? true
+
+        if startsNewPrefill {
+            prefillProgress = PrefillProgress(
+                contextStart: contextStart,
+                total: total,
+                current: current,
+                didRecord: false
+            )
+        } else {
+            prefillProgress?.current = current
+        }
+
+        guard current >= total, prefillProgress?.didRecord == false else { return }
+
+        let tokenCount = max((contextEnd ?? total) - contextStart, 0)
+        let speed = value(for: Self.prefillPattern, in: line)
+        let duration = elapsedDuration(for: tokenCount, speed: speed, in: line)
+        lifetimeMetrics.addPrefill(tokens: tokenCount, duration: duration)
+        prefillProgress?.didRecord = true
+        persistLifetimeMetrics()
+    }
+
+    private func recordGenerationIfNeeded(in line: String) {
+        let range = NSRange(line.startIndex..., in: line)
+        guard let match = Self.generationTokenPattern.firstMatch(in: line, range: range),
+              let tokenCount = Int64(line[Range(match.range(at: 1), in: line)!]) else { return }
+
+        let previousCount = lastGenerationTokenCount ?? 0
+        if tokenCount < previousCount {
+            // A lower cumulative count indicates a new request even if the
+            // server did not emit a prompt-start line between requests.
+            lastGenerationTokenCount = 0
+            lastGenerationElapsedSeconds = nil
+        }
+
+        let countBeforeThisLine = lastGenerationTokenCount ?? 0
+        let delta = tokenCount - countBeforeThisLine
+        guard delta > 0 else {
+            lastGenerationTokenCount = tokenCount
+            return
+        }
+
+        let speed = value(for: Self.generationPattern, in: line)
+        let elapsed = value(for: Self.elapsedSecondsPattern, in: line)
+        let duration: Double?
+        if let elapsed, let previousElapsed = lastGenerationElapsedSeconds, elapsed > previousElapsed {
+            duration = elapsed - previousElapsed
+        } else if lastGenerationElapsedSeconds != nil {
+            // Some server log formats report a per-line duration rather than a
+            // cumulative one. Fall back to the measured throughput in that case.
+            duration = speed.map { Double(delta) / $0 }
+        } else {
+            duration = elapsed ?? speed.map { Double(delta) / $0 }
+        }
+
+        lifetimeMetrics.addGeneration(tokens: delta, duration: duration)
+        lastGenerationTokenCount = tokenCount
+        lastGenerationElapsedSeconds = elapsed
+        persistLifetimeMetrics()
+    }
+
+    private func elapsedDuration(for tokens: Int64, speed: Double?, in line: String) -> Double? {
+        if let elapsed = value(for: Self.elapsedSecondsPattern, in: line), elapsed > 0 {
+            return elapsed
+        }
+        guard let speed, speed > 0, tokens > 0 else { return nil }
+        return Double(tokens) / speed
+    }
+
+    private func value(for pattern: NSRegularExpression, in line: String) -> Double? {
+        let range = NSRange(line.startIndex..., in: line)
+        guard let match = pattern.firstMatch(in: line, range: range),
+              let valueRange = Range(match.range(at: 1), in: line) else { return nil }
+        return Double(line[valueRange])
+    }
+
+    private func persistLifetimeMetrics() {
+        pendingLifetimeMetricsPersistence?.cancel()
+
+        let metrics = lifetimeMetrics
+        let store = lifetimeMetricsStore
+        let workItem = DispatchWorkItem {
+            try? store.save(metrics)
+        }
+        pendingLifetimeMetricsPersistence = workItem
+        lifetimeMetricsPersistenceQueue.asyncAfter(
+            deadline: .now() + .seconds(1),
+            execute: workItem
+        )
+    }
+
+    /// Flushes the latest in-memory snapshot. Used during orderly app
+    /// termination so the short opportunistic write window does not matter.
+    func flushLifetimeMetrics() {
+        pendingLifetimeMetricsPersistence?.cancel()
+        pendingLifetimeMetricsPersistence = nil
+
+        let metrics = lifetimeMetrics
+        let store = lifetimeMetricsStore
+        lifetimeMetricsPersistenceQueue.sync {
+            try? store.save(metrics)
+        }
+    }
+
+    func resetLifetimeMetrics() {
+        lifetimeMetrics = LifetimeMetrics()
+        flushLifetimeMetrics()
     }
 
     private func differs(_ lhs: MetricsSnapshot, _ rhs: MetricsSnapshot) -> Bool {
@@ -199,6 +364,9 @@ final class StatusMonitor {
         gpuLoadPercent = nil
         lastPrefillUpdate = nil
         lastGenerationUpdate = nil
+        prefillProgress = nil
+        lastGenerationTokenCount = nil
+        lastGenerationElapsedSeconds = nil
         history.removeAll()
         stopTimer()
     }

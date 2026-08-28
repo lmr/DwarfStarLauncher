@@ -4,6 +4,11 @@ import Foundation
 
 final class StatusMonitorTests: XCTestCase {
 
+    private func makeMetricsStore() -> LifetimeMetricsStore {
+        let directory = appMakeTempDirectory()
+        return LifetimeMetricsStore(fileURL: directory.appendingPathComponent("lifetime_metrics.json"))
+    }
+
     func testParsesPrefillThroughput() {
         let monitor = StatusMonitor()
         monitor.parse("prefill chunk=12.34 t/s avg=56.78 t/s")
@@ -16,6 +21,68 @@ final class StatusMonitorTests: XCTestCase {
         monitor.parse("decoding chunk=1.23 t/s avg=45.67 t/s")
         XCTAssertEqual(monitor.generationTokensPerSecond, 45.67)
         XCTAssertEqual(monitor.prefillTokensPerSecond, 0)
+    }
+
+    func testRecordsCompletedPrefillTokensAndPersistsThem() {
+        let store = makeMetricsStore()
+        let monitor = StatusMonitor(lifetimeMetricsStore: store)
+
+        monitor.parse("chat ctx=0..100:100 prompt start")
+        monitor.parse("chat ctx=0..100:100 prefill chunk 0/100 (0.0%) chunk=0.00 t/s avg=0.00 t/s 0.000s")
+        monitor.parse("chat ctx=0..100:100 prefill chunk 100/100 (100.0%) chunk=50.00 t/s avg=50.00 t/s 2.000s")
+        monitor.flushLifetimeMetrics()
+
+        XCTAssertEqual(monitor.lifetimeMetrics.prefilledTokenCount, 100)
+        XCTAssertEqual(monitor.lifetimeMetrics.averagePrefillTokensPerSecond ?? 0, 50, accuracy: 0.001)
+        XCTAssertEqual(store.load(), monitor.lifetimeMetrics)
+    }
+
+    func testRecordsCumulativeGenerationTokensOnlyOnce() {
+        let monitor = StatusMonitor(lifetimeMetricsStore: makeMetricsStore())
+
+        monitor.parse("chat ctx=0..100:100 prompt start")
+        monitor.parse("chat ctx=100..110:10 gen=10 decoding chunk=10.00 t/s avg=10.00 t/s 1.000s")
+        monitor.parse("chat ctx=100..130:30 gen=30 decoding chunk=20.00 t/s avg=15.00 t/s 2.000s")
+        monitor.parse("chat ctx=100..130:30 gen=30 decoding chunk=20.00 t/s avg=15.00 t/s 2.000s")
+
+        XCTAssertEqual(monitor.lifetimeMetrics.generatedTokenCount, 30)
+        XCTAssertEqual(monitor.lifetimeMetrics.averageGenerationTokensPerSecond ?? 0, 15, accuracy: 0.001)
+    }
+
+    func testLifetimeMetricsLoadAcrossMonitorInstances() {
+        let store = makeMetricsStore()
+        let firstMonitor = StatusMonitor(lifetimeMetricsStore: store)
+        firstMonitor.parse("chat ctx=0..50:50 prompt start")
+        firstMonitor.parse("chat ctx=0..50:50 prefill chunk 50/50 (100.0%) chunk=25.00 t/s avg=25.00 t/s 2.000s")
+        firstMonitor.flushLifetimeMetrics()
+
+        let secondMonitor = StatusMonitor(lifetimeMetricsStore: store)
+
+        XCTAssertEqual(secondMonitor.lifetimeMetrics.prefilledTokenCount, 50)
+        XCTAssertEqual(secondMonitor.lifetimeMetrics.averagePrefillTokensPerSecond ?? 0, 25, accuracy: 0.001)
+    }
+
+    func testAverageSpeedIsWeightedByTokenProcessingTime() {
+        let monitor = StatusMonitor(lifetimeMetricsStore: makeMetricsStore())
+
+        monitor.parse("chat ctx=0..100:100 prompt start")
+        monitor.parse("chat ctx=0..100:100 prefill chunk 100/100 (100.0%) chunk=50.00 t/s avg=50.00 t/s 2.000s")
+        monitor.parse("chat ctx=100..200:100 prompt start")
+        monitor.parse("chat ctx=100..200:100 prefill chunk 200/200 (100.0%) chunk=100.00 t/s avg=100.00 t/s 1.000s")
+
+        XCTAssertEqual(monitor.lifetimeMetrics.prefilledTokenCount, 200)
+        XCTAssertEqual(monitor.lifetimeMetrics.averagePrefillTokensPerSecond ?? 0, 200.0 / 3.0, accuracy: 0.001)
+    }
+
+    func testResetClearsLiveMetricsButKeepsLifetimeMetrics() {
+        let monitor = StatusMonitor(lifetimeMetricsStore: makeMetricsStore())
+        monitor.parse("chat ctx=0..50:50 prompt start")
+        monitor.parse("chat ctx=0..50:50 prefill chunk 50/50 (100.0%) chunk=25.00 t/s avg=25.00 t/s 2.000s")
+
+        monitor.reset()
+
+        XCTAssertTrue(monitor.history.isEmpty)
+        XCTAssertEqual(monitor.lifetimeMetrics.prefilledTokenCount, 50)
     }
 
     func testParsesContextUsage() {

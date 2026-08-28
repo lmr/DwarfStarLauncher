@@ -94,6 +94,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         Self.sharedServerManager.stopSynchronously()
         Self.sharedStatusMonitor.stopTimer()
+        Self.sharedStatusMonitor.flushLifetimeMetrics()
         Self.sharedModelDownloader.cancel()
     }
 

@@ -137,6 +137,56 @@ struct DashboardView: View {
             }
     }
 
+    // MARK: - Lifetime metrics
+
+    private var lifetimeMetricsCard: some View {
+        Card {
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.s3) {
+                HStack {
+                    Text("Lifetime Metrics")
+                        .font(.headline)
+                    Spacer()
+                    Text("Across server sessions")
+                        .font(.caption)
+                        .foregroundStyle(DesignTokens.typeTertiary)
+                }
+
+                HStack(spacing: DesignTokens.Spacing.s4) {
+                    StatTile(
+                        label: "Avg. Prefill",
+                        value: formatSpeed(statusMonitor.lifetimeMetrics.averagePrefillTokensPerSecond),
+                        unit: "tok/s",
+                        systemImage: "speedometer"
+                    )
+                    StatTile(
+                        label: "Avg. Generation",
+                        value: formatSpeed(statusMonitor.lifetimeMetrics.averageGenerationTokensPerSecond),
+                        unit: "tok/s",
+                        systemImage: "speedometer"
+                    )
+                    StatTile(
+                        label: "Prefilled",
+                        value: TokenCountFormatter.humanize(statusMonitor.lifetimeMetrics.prefilledTokenCount),
+                        unit: "tokens",
+                        systemImage: "arrow.down"
+                    )
+                    StatTile(
+                        label: "Generated",
+                        value: TokenCountFormatter.humanize(statusMonitor.lifetimeMetrics.generatedTokenCount),
+                        unit: "tokens",
+                        systemImage: "arrow.up"
+                    )
+                }
+            }
+        }
+        .padding(.horizontal, DesignTokens.Spacing.s4)
+    }
+
+    private func formatSpeed(_ speed: Double?) -> String {
+        guard let speed else { return "—" }
+        return String(format: "%.1f", speed)
+    }
+
     private func metricChart(title: String, data: [ChartPoint]) -> some View {
         Card {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.s3) {
@@ -168,6 +218,8 @@ struct DashboardView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: DesignTokens.Spacing.s5) {
+                lifetimeMetricsCard
+
                 if isStopped {
                     EmptyStateView(
                         symbol: "play.circle",
@@ -187,12 +239,14 @@ struct DashboardView: View {
                     .padding(.top, DesignTokens.Spacing.s6)
                 } else {
                     // StatTile row — horizontal layout, equal-width tiles
-                    HStack(spacing: DesignTokens.Spacing.s4) {
-                        prefillTile
-                        generationTile
-                        contextTile
-                        memoryTile
-                        gpuTile
+                    Card {
+                        HStack(spacing: DesignTokens.Spacing.s4) {
+                            prefillTile
+                            generationTile
+                            contextTile
+                            memoryTile
+                            gpuTile
+                        }
                     }
                     .padding(.top, DesignTokens.Spacing.s2)
                     .padding(.horizontal, DesignTokens.Spacing.s4)
