@@ -127,7 +127,9 @@ final class ModelDownloaderDownloadedStateTests: XCTestCase {
     func testResumeWithHTTP200DiscardsPartialWithoutAppending() throws {
         let payload = Data("GGUFfresh-payload".utf8)
         let file = DownloadTarget.ds4fDspark.files[0]
-        try Data("GGUFold-partial".utf8).write(to: PathResolver.partFileURL(for: file.localName))
+        try Data("GGUFold-partial".utf8).write(
+            to: PathResolver.partFileURL(for: file.localName, in: DownloadTarget.ds4fDspark.storageKind)
+        )
 
         let downloader = makeDownloader(data: payload)
         downloader.availableTargets = [.ds4fDspark]
@@ -140,8 +142,13 @@ final class ModelDownloaderDownloadedStateTests: XCTestCase {
         downloader.download(target: .ds4fDspark)
         wait(for: [expectation], timeout: 2)
 
-        XCTAssertFalse(FileManager.default.fileExists(atPath: PathResolver.partFileURL(for: file.localName).path))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: PathResolver.modelsDir.appendingPathComponent(file.localName).path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: PathResolver.partFileURL(for: file.localName, in: DownloadTarget.ds4fDspark.storageKind).path
+        ))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: PathResolver.modelsDirectory(for: DownloadTarget.ds4fDspark.storageKind)
+                .appendingPathComponent(file.localName).path
+        ))
         XCTAssertEqual(MockDownloadURLProtocol.requests.count, 1)
         XCTAssertNotNil(MockDownloadURLProtocol.requests[0].value(forHTTPHeaderField: "Range"))
     }
@@ -158,7 +165,9 @@ final class ModelDownloaderDownloadedStateTests: XCTestCase {
 
         downloader.download(target: .ds4fDspark)
         wait(for: [expectation], timeout: 2)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: PathResolver.partFileURL(for: file.localName).path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: PathResolver.partFileURL(for: file.localName, in: DownloadTarget.ds4fDspark.storageKind).path
+        ))
     }
 
     func testMultiFileDownloadUsesResolvedPerFileSizesAndSequencesFiles() {
@@ -182,7 +191,10 @@ final class ModelDownloaderDownloadedStateTests: XCTestCase {
         wait(for: [expectation], timeout: 2)
 
         for file in DownloadTarget.proQ4Split.files {
-            XCTAssertTrue(FileManager.default.fileExists(atPath: PathResolver.modelsDir.appendingPathComponent(file.localName).path))
+            XCTAssertTrue(FileManager.default.fileExists(
+                atPath: PathResolver.modelsDirectory(for: DownloadTarget.proQ4Split.storageKind)
+                    .appendingPathComponent(file.localName).path
+            ))
         }
         XCTAssertEqual(MockDownloadURLProtocol.requests.count, 2)
     }

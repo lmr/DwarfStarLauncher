@@ -39,6 +39,18 @@ enum DownloadTarget: String, CaseIterable, Identifiable, Equatable {
         }
     }
 
+    /// Downloaded files are kept in the same subdirectory that their picker
+    /// scans. DSpark is an MTP support model, while the other catalog targets
+    /// are main language models.
+    var storageKind: ModelStorageKind {
+        switch self {
+        case .ds4fDspark:
+            return .mtp
+        default:
+            return .main
+        }
+    }
+
     var repo: String {
         switch self {
         case .ds4fQ2, .ds4fQ2Q4, .ds4fQ4, .ds4fMxfp4, .ds4fDspark,

@@ -6,13 +6,14 @@ import HuggingFaceDownloader
 // MARK: - Settings Groups
 
 enum SettingsGroup: String, CaseIterable, Identifiable {
-    case model, mtp, server, advanced, ds4, interface
+    case model, vision, mtp, server, advanced, ds4, interface
 
     var id: Self { self }
 
     var label: String {
         switch self {
         case .model: return "Model"
+        case .vision: return "Vision"
         case .mtp: return "MTP"
         case .server: return "Server"
         case .advanced: return "Advanced"
@@ -24,6 +25,7 @@ enum SettingsGroup: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .model: return "cpu"
+        case .vision: return "eye"
         case .mtp: return "bolt.fill"
         case .server: return "network"
         case .advanced: return "slider.horizontal.3"
@@ -101,6 +103,8 @@ struct ConfigOverlayView: View {
                 switch selectedGroup {
                 case .model:
                     modelSection
+                case .vision:
+                    visionSection
                 case .mtp:
                     mtpSection
                 case .server:
@@ -165,6 +169,64 @@ struct ConfigOverlayView: View {
                 .environment(modelManager)
 
             LabeledContent {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Button(action: openModelsDirectoryPicker) {
+                        if PathResolver.hasCustomModelsDirectory {
+                            Text(PathResolver.modelsDir.path)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        } else {
+                            Text("~/.ds4-launcher/models (default)")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .help("Click to change the base directory containing GGUF model files")
+
+                    if !PathResolver.hasCustomModelsDirectory {
+                        Button("Reset to Default") {
+                            PathResolver.resetModelsDirectory()
+                            modelManager.refresh()
+                            debouncedPersist()
+                        }
+                        .controlSize(.small)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+            } label: {
+                rowLabel("Models Directory", caption: "Parent location containing main, mtp, and vision subdirectories")
+            }
+
+            LabeledContent {
+                SecureField("Token", text: Binding(
+                    get: { localHfToken ?? "" },
+                    set: { localHfToken = $0.isEmpty ? nil : $0 }
+                ))
+                .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: 240)
+                .onChange(of: localHfToken) { debouncedPersist() }
+            } label: {
+                rowLabel("HuggingFace Token", caption: "Required for gated models")
+            }
+        } header: {
+            Text("Model")
+        }
+    }
+
+    private var visionSection: some View {
+        Section {
+            VisionModelPickerView(path: $localVisionEncoderPath)
+                .environment(modelManager)
+
+            LabeledContent {
+                Text(PathResolver.visionModelsDir.path)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .foregroundStyle(.secondary)
+            } label: {
+                rowLabel("Vision Model Location", caption: "Vision encoders are stored in the vision subdirectory")
+            }
+
+            LabeledContent {
                 HStack(spacing: 8) {
                     TextField(
                         "Optional vision encoder GGUF",
@@ -195,52 +257,12 @@ struct ConfigOverlayView: View {
                 }
             } label: {
                 rowLabel(
-                    "Vision Encoder",
-                    caption: "Optional sidecar passed as --vision; requires a matching Vision-Exp model"
+                    "Selected Encoder",
+                    caption: "Passed as --vision; use a matching Vision-Exp language model"
                 )
             }
-
-            LabeledContent {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Button(action: openModelsDirectoryPicker) {
-                        if PathResolver.hasCustomModelsDirectory {
-                            Text(PathResolver.modelsDir.path)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        } else {
-                            Text("~/.ds4-launcher/models (default)")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .help("Click to change the base directory containing GGUF model files")
-
-                    if !PathResolver.hasCustomModelsDirectory {
-                        Button("Reset to Default") {
-                            PathResolver.resetModelsDirectory()
-                            modelManager.refresh()
-                            debouncedPersist()
-                        }
-                        .controlSize(.small)
-                        .foregroundStyle(.secondary)
-                    }
-                }
-            } label: {
-                rowLabel("Models Directory", caption: "Base location of GGUF model files (shared by Model and MTP)")
-            }
-
-            LabeledContent {
-                SecureField("Token", text: Binding(
-                    get: { localHfToken ?? "" },
-                    set: { localHfToken = $0.isEmpty ? nil : $0 }
-                ))
-                .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: 240)
-                .onChange(of: localHfToken) { debouncedPersist() }
-            } label: {
-                rowLabel("HuggingFace Token", caption: "Required for gated models")
-            }
         } header: {
-            Text("Model")
+            Text("Vision Encoder")
         }
     }
 
@@ -250,10 +272,12 @@ struct ConfigOverlayView: View {
                 .environment(modelManager)
 
             LabeledContent {
-                Text(PathResolver.modelsDir.lastPathComponent.isEmpty ? "(default)" : PathResolver.modelsDir.lastPathComponent)
+                Text(PathResolver.mtpModelsDir.path)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                     .foregroundStyle(.secondary)
             } label: {
-                rowLabel("MTP Model Location", caption: "Same directory as Models Directory")
+                rowLabel("MTP Model Location", caption: "MTP models are stored in the mtp subdirectory")
             }
 
             LabeledContent {

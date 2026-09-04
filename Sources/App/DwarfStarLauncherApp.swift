@@ -140,13 +140,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Effect 1 — refresh the model list so the completed file appears.
         Self.sharedModelManager.refresh()
 
-        // Effect 2 — wire the downloaded model into selection and the server
-        // config, but only when the download is a selectable model file inside
-        // the models directory. Shard/split targets and files outside the
-        // models dir are not selectable model paths.
+        // Effect 2 — wire a completed single-file download into the matching
+        // picker and server config. Shard/split targets are not single paths.
         guard let modelPath = Self.selectableModelPath(for: target) else { return }
-        Self.sharedServerManager.config.modelPath = modelPath
-        Self.sharedModelManager.selectModel(byPath: modelPath)
+        switch target.storageKind {
+        case .main:
+            Self.sharedServerManager.config.modelPath = modelPath
+            Self.sharedModelManager.selectModel(byPath: modelPath)
+        case .mtp:
+            Self.sharedServerManager.config.mtpModelPath = modelPath
+            Self.sharedModelManager.selectMtpModel(byPath: modelPath)
+        case .vision:
+            Self.sharedServerManager.config.visionEncoderPath = modelPath
+            Self.sharedModelManager.selectVisionModel(byPath: modelPath)
+        }
     }
 
     private func handleDownloadError(_ message: String) {
@@ -168,11 +175,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             break
         }
 
-        let resolvedURL = PathResolver.modelsDir.appendingPathComponent(firstFile.localName)
+        let resolvedURL = PathResolver.modelsDirectory(for: target.storageKind)
+            .appendingPathComponent(firstFile.localName)
         let canonicalResolvedURL = resolvedURL.resolvingSymlinksInPath()
-        let canonicalModelsDir = PathResolver.modelsDir.resolvingSymlinksInPath()
-        guard canonicalResolvedURL.path == canonicalModelsDir.path
-                || canonicalResolvedURL.path.hasPrefix(canonicalModelsDir.path + "/") else {
+        let canonicalModelsDir = PathResolver.modelsDirectory(for: target.storageKind)
+            .resolvingSymlinksInPath()
+        guard canonicalResolvedURL.path.hasPrefix(canonicalModelsDir.path + "/") else {
             return nil
         }
         return resolvedURL.path

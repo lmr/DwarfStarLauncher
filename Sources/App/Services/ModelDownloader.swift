@@ -113,16 +113,23 @@ final class ModelDownloader: NSObject, URLSessionDataDelegate {
 
     private func completedFileNames() -> Set<String> {
         let fm = FileManager.default
-        let modelsDir = PathResolver.modelsDir
         var result: Set<String> = []
         for target in DownloadTarget.allCases {
             for file in target.files {
-                let url = modelsDir.appendingPathComponent(file.localName)
-                guard fm.fileExists(atPath: url.path),
-                      let attrs = try? fm.attributesOfItem(atPath: url.path),
-                      let size = attrs[.size] as? Int64,
-                      size == file.size else { continue }
-                result.insert(file.localName)
+                let urls = [
+                    PathResolver.modelsDirectory(for: target.storageKind).appendingPathComponent(file.localName),
+                    PathResolver.modelsDir.appendingPathComponent(file.localName)
+                ]
+                if urls.contains(where: { url in
+                    guard fm.fileExists(atPath: url.path),
+                          let attrs = try? fm.attributesOfItem(atPath: url.path),
+                          let size = attrs[.size] as? Int64 else {
+                        return false
+                    }
+                    return size == file.size
+                }) {
+                    result.insert(file.localName)
+                }
             }
         }
         return result
@@ -130,18 +137,22 @@ final class ModelDownloader: NSObject, URLSessionDataDelegate {
 
     private func partialFileNames() -> Set<String> {
         let fm = FileManager.default
-        let modelsDir = PathResolver.modelsDir
         var result: Set<String> = []
         for target in DownloadTarget.allCases {
             for file in target.files {
-                let url = PathResolver.partFileURL(for: file.localName)
-                guard let attrs = try? fm.attributesOfItem(atPath: url.path),
-                      let size = attrs[.size] as? Int64,
-                      size > 0 else { continue }
-                guard url.deletingLastPathComponent().standardizedFileURL == modelsDir.standardizedFileURL else {
-                    continue
+                let urls = [
+                    PathResolver.partFileURL(for: file.localName, in: target.storageKind),
+                    PathResolver.modelsDir.appendingPathComponent("\(file.localName).part")
+                ]
+                if urls.contains(where: { url in
+                    guard let attrs = try? fm.attributesOfItem(atPath: url.path),
+                          let size = attrs[.size] as? Int64 else {
+                        return false
+                    }
+                    return size > 0
+                }) {
+                    result.insert(file.localName)
                 }
-                result.insert(file.localName)
             }
         }
         return result
@@ -264,10 +275,19 @@ final class ModelDownloader: NSObject, URLSessionDataDelegate {
         }
 
         let file = target.files[activeFileIndex]
-        let url = PathResolver.partFileURL(for: file.localName)
+        let url = PathResolver.partFileURL(for: file.localName, in: target.storageKind)
         partURL = url
         currentFileExpectedSize = fileSizes[file.localName] ?? file.size
         expectedTotalSize = max(expectedTotalSize, 0)
+
+        // Resume a legacy root-level partial download in its new category
+        // directory when possible.
+        if !FileManager.default.fileExists(atPath: url.path) {
+            let legacyURL = PathResolver.modelsDir.appendingPathComponent("\(file.localName).part")
+            if FileManager.default.fileExists(atPath: legacyURL.path) {
+                try? FileManager.default.moveItem(at: legacyURL, to: url)
+            }
+        }
 
         var offset: Int64 = 0
         if FileManager.default.fileExists(atPath: url.path) {
@@ -512,7 +532,8 @@ final class ModelDownloader: NSObject, URLSessionDataDelegate {
         closeOutputFile()
         finishSession()
 
-        let finalURL = PathResolver.modelsDir.appendingPathComponent(file.localName)
+        let finalURL = PathResolver.modelsDirectory(for: target.storageKind)
+            .appendingPathComponent(file.localName)
         do {
             try FileManager.default.moveItem(at: partURL, to: finalURL)
         } catch {

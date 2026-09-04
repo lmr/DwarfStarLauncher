@@ -43,25 +43,32 @@ ds4-server \
 The authoritative ds4-side examples are in the sibling engine repository's
 `README.md` under “DeepSeek V4 Flash Vision Experimental”.
 
-## Current launcher gaps
+## Model storage layout
 
-These are the files that need to change:
+The launcher uses `~/.ds4-launcher/models` as a parent directory with three
+category directories:
 
-- `Sources/App/Models/ServerConfig.swift` — no encoder-path field and no
-  `--vision` emission.
-- `Sources/App/Views/ConfigOverlayView.swift` — the local Settings mirror does
-  not load, display, or save an encoder path.
-- `Sources/App/Services/ModelManager.swift` — every `.gguf` that is not MTP or
-  DSpark is currently classified as a main model, so the encoder would appear
-  in the main-model picker.
-- `Tests/AppTests/ServerConfigTests.swift` — no flag or backward-compatibility
-  coverage.
-- `Tests/AppTests/FileSystemServicesTests.swift` — no vision-encoder model
-  classification coverage.
+```text
+~/.ds4-launcher/models/
+├── main/    # language models
+├── mtp/     # MTP and DSpark support models
+└── vision/  # vision encoder sidecars
+```
 
-`ServerManager` already obtains its process arguments from
-`launchConfig.buildArguments()`, so no new `Process` plumbing is needed for the
-minimum implementation.
+New catalog downloads are written to the appropriate category directory.
+Root-level GGUF files from older launcher versions remain discoverable for
+backward compatibility and are not moved automatically.
+
+## Implemented design
+
+The launcher now persists the optional encoder path, exposes a dedicated
+Vision group in Settings, and emits `--vision <path>` at launch.
+Model discovery tracks main models, MTP/DSpark models, and vision encoders as
+separate collections. New downloads are stored in the matching model
+subdirectory, while legacy root-level GGUF files remain discoverable.
+
+The server manager validates the selected encoder before starting `ds4-server`
+and reports an actionable error if it is missing or unreadable.
 
 ## Phase 1: implement the flag and manual sidecar selection
 
@@ -156,8 +163,9 @@ In `Sources/App/Views/ConfigOverlayView.swift`:
    - show an empty state such as “No vision encoders found — place one in the
      models directory”.
 
-5. Put the picker in the existing Model Settings section, directly below the
-   main model picker. Label it clearly, for example:
+5. Put the picker in a dedicated Vision Settings group next to the existing MTP
+   group. Keep the main Vision-Exp language model in the normal Model group.
+   Label the encoder clearly, for example:
 
    ```text
    Vision Encoder (optional)

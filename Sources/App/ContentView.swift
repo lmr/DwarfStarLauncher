@@ -64,6 +64,9 @@ struct ContentView: View {
         let dirs = [
             PathResolver.binDir,
             PathResolver.modelsDir,
+            PathResolver.mainModelsDir,
+            PathResolver.mtpModelsDir,
+            PathResolver.visionModelsDir,
             PathResolver.metalDir,
             PathResolver.configRoot
         ]

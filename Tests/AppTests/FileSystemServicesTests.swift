@@ -42,6 +42,8 @@ final class ModelManagerTests: XCTestCase {
         appWriteFile(named: "Model-B.gguf", size: 20, in: tempDir)
         appWriteFile(named: "MTP-Model.gguf", size: 30, in: tempDir)
         appWriteFile(named: "DSPARK-Model.gguf", size: 40, in: tempDir)
+        appWriteFile(named: "DeepSeek-V4-Flash-Vision-Encoder.gguf", size: 50, in: tempDir)
+        appWriteFile(named: "DeepSeek-V4-Flash-Vision-Exp.gguf", size: 60, in: tempDir)
         appWriteFile(named: "not-a-model.txt", size: 5, in: tempDir)
     }
 
@@ -50,12 +52,27 @@ final class ModelManagerTests: XCTestCase {
         let manager = ModelManager()
         manager.refresh()
 
-        XCTAssertEqual(manager.models.count, 2)
+        XCTAssertEqual(manager.models.count, 3)
         XCTAssertEqual(manager.mtpModels.count, 2)
+        XCTAssertEqual(manager.visionModels.count, 1)
 
         // Sorted by size descending.
-        XCTAssertEqual(manager.models.map(\.name), ["Model-B.gguf", "Model-A.gguf"])
+        XCTAssertEqual(manager.models.map(\.name), ["DeepSeek-V4-Flash-Vision-Exp.gguf", "Model-B.gguf", "Model-A.gguf"])
         XCTAssertEqual(manager.mtpModels.map(\.name), ["DSPARK-Model.gguf", "MTP-Model.gguf"])
+        XCTAssertEqual(manager.visionModels.map(\.name), ["DeepSeek-V4-Flash-Vision-Encoder.gguf"])
+    }
+
+    func testRefreshDiscoversDedicatedModelDirectories() {
+        appWriteFile(named: "main-model.gguf", size: 10, in: PathResolver.mainModelsDir)
+        appWriteFile(named: "mtp-model.gguf", size: 20, in: PathResolver.mtpModelsDir)
+        appWriteFile(named: "encoder.gguf", size: 30, in: PathResolver.visionModelsDir)
+
+        let manager = ModelManager()
+        manager.refresh()
+
+        XCTAssertEqual(manager.models.map(\.name), ["main-model.gguf"])
+        XCTAssertEqual(manager.mtpModels.map(\.name), ["mtp-model.gguf"])
+        XCTAssertEqual(manager.visionModels.map(\.name), ["encoder.gguf"])
     }
 
     func testRefreshIgnoresNonGgufFiles() {
@@ -70,6 +87,7 @@ final class ModelManagerTests: XCTestCase {
         manager.refresh()
         XCTAssertEqual(manager.models.count, 0)
         XCTAssertEqual(manager.mtpModels.count, 0)
+        XCTAssertEqual(manager.visionModels.count, 0)
     }
 
     func testSelectModelByPath() {
@@ -91,6 +109,26 @@ final class ModelManagerTests: XCTestCase {
         manager.refresh()
         manager.selectMtpModel(byPath: "/does/not/exist.gguf")
         XCTAssertNil(manager.selectedMtpModel)
+    }
+
+    func testSelectVisionModelByPath() {
+        seedFiles()
+        let manager = ModelManager()
+        manager.refresh()
+
+        let target = tempDir.appendingPathComponent("DeepSeek-V4-Flash-Vision-Encoder.gguf").path
+        manager.selectVisionModel(byPath: target)
+
+        XCTAssertEqual(manager.selectedVisionModel?.name, "DeepSeek-V4-Flash-Vision-Encoder.gguf")
+        XCTAssertTrue(manager.visionModels.first?.isSelected == true)
+    }
+
+    func testSelectVisionModelByPathIgnoresMissingPath() {
+        seedFiles()
+        let manager = ModelManager()
+        manager.refresh()
+        manager.selectVisionModel(byPath: "/does/not/exist-vision.gguf")
+        XCTAssertNil(manager.selectedVisionModel)
     }
 }
 
@@ -132,6 +170,13 @@ final class PathResolverTests: XCTestCase {
         PathResolver.resetModelsDirectory()
         let url = PathResolver.partFileURL(for: "model.gguf")
         XCTAssertEqual(url.lastPathComponent, "model.gguf.part")
-        XCTAssertEqual(url.deletingLastPathComponent().path, PathResolver.modelsDir.path)
+        XCTAssertEqual(url.deletingLastPathComponent().path, PathResolver.mainModelsDir.path)
+    }
+
+    func testModelDirectoriesAreNestedUnderModelsDir() {
+        PathResolver.resetModelsDirectory()
+        XCTAssertEqual(PathResolver.mainModelsDir.deletingLastPathComponent(), PathResolver.modelsDir)
+        XCTAssertEqual(PathResolver.mtpModelsDir.deletingLastPathComponent(), PathResolver.modelsDir)
+        XCTAssertEqual(PathResolver.visionModelsDir.deletingLastPathComponent(), PathResolver.modelsDir)
     }
 }

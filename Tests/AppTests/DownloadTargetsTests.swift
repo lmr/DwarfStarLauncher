@@ -17,6 +17,12 @@ final class DownloadTargetsTests: XCTestCase {
         XCTAssertEqual(DownloadTarget.glmAntirezQ4.category, .glmModels)
     }
 
+    func testStorageKindMapping() {
+        XCTAssertEqual(DownloadTarget.ds4fQ2.storageKind, .main)
+        XCTAssertEqual(DownloadTarget.ds4fDspark.storageKind, .mtp)
+        XCTAssertEqual(DownloadTarget.proQ4Split.storageKind, .main)
+    }
+
     func testRepoMapping() {
         XCTAssertEqual(DownloadTarget.ds4fQ2.repo, "antirez/deepseek-v4-gguf")
         XCTAssertEqual(DownloadTarget.proQ4Split.repo, "antirez/deepseek-v4-gguf")

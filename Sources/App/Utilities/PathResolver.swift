@@ -1,6 +1,12 @@
 import Foundation
 import SwiftUI
 
+enum ModelStorageKind: String, CaseIterable {
+    case main
+    case mtp
+    case vision
+}
+
 enum PathResolver {
     private static let defaults = UserDefaults.standard
 
@@ -18,10 +24,9 @@ enum PathResolver {
         dataRoot.appendingPathComponent("bin")
     }
 
-    /// The base directory containing GGUF model files. Returns the user-selected
-    /// location if set, otherwise falls back to `~/.ds4-launcher/models`. Both the
-    /// main-model and MTP draft pickers read from this single source via
-    /// `ModelManager.refresh()`, so changing it relocates both at once.
+    /// The parent directory containing the main, MTP, and vision model
+    /// subdirectories. Returns the user-selected location if set, otherwise
+    /// falls back to `~/.ds4-launcher/models`.
     static var modelsDir: URL {
         let custom = defaults.string(forKey: "customModelsDirectory") ?? ""
         if custom.isEmpty {
@@ -32,6 +37,18 @@ enum PathResolver {
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: nil)
         return url
     }
+
+    /// Dedicated storage locations keep main models, MTP models, and vision
+    /// encoders separate while sharing one user-configurable parent directory.
+    static func modelsDirectory(for kind: ModelStorageKind) -> URL {
+        let url = modelsDir.appendingPathComponent(kind.rawValue, isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: nil)
+        return url
+    }
+
+    static var mainModelsDir: URL { modelsDirectory(for: .main) }
+    static var mtpModelsDir: URL { modelsDirectory(for: .mtp) }
+    static var visionModelsDir: URL { modelsDirectory(for: .vision) }
 
     static var hasCustomModelsDirectory: Bool {
         let custom = defaults.string(forKey: "customModelsDirectory") ?? ""
@@ -70,7 +87,7 @@ enum PathResolver {
         binDir.appendingPathComponent("ds4-server")
     }
 
-    static func partFileURL(for filename: String) -> URL {
-        modelsDir.appendingPathComponent("\(filename).part")
+    static func partFileURL(for filename: String, in kind: ModelStorageKind = .main) -> URL {
+        modelsDirectory(for: kind).appendingPathComponent("\(filename).part")
     }
 }
