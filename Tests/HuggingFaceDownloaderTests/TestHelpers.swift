@@ -65,8 +65,8 @@ func makeTempConfigURL() -> URL {
     makeTempDirectory().appendingPathComponent("config.json")
 }
 
-/// Resets the static in-memory token cache so tests are isolated from each other.
-/// Uses a temp-backed store so no real user config file is touched.
+/// Exercises the delete path on a temp-backed store so tests are isolated from
+/// each other and no real user config file is touched.
 func resetTokenCache() {
     let store = ConfigTokenStore(fileURL: makeTempConfigURL())
     try? store.delete()

@@ -26,8 +26,22 @@ final class StatusMonitor {
 
     private(set) var lifetimeMetrics: LifetimeMetrics
 
-    private(set) var history: [MetricsSnapshot] = []
+    /// A fixed-size ring buffer. It keeps append cost bounded even when the
+    /// server emits tens of thousands of log lines per session.
+    var history: [MetricsSnapshot] {
+        guard !historyStorage.isEmpty else { return [] }
+        guard historyHead > 0 else { return historyStorage }
+        return Array(historyStorage[historyHead...]) + Array(historyStorage[..<historyHead])
+    }
+    private var historyStorage: [MetricsSnapshot] = []
+    private var historyHead = 0
+    private let historyLimit = 1000
+    private(set) var hasRealThroughput = false
     private var timer: Timer?
+    private let systemMetricsQueue = DispatchQueue(
+        label: "com.dwarfstarlauncher.system-metrics",
+        qos: .utility
+    )
     private var lastPrefillUpdate: Date?
     private var lastGenerationUpdate: Date?
     private let lifetimeMetricsStore: LifetimeMetricsStore
@@ -81,6 +95,7 @@ final class StatusMonitor {
                let value = Double(line[Range(match.range(at: 1), in: line)!]) {
                 prefillTokensPerSecond = value
                 generationTokensPerSecond = 0
+                hasRealThroughput = hasRealThroughput || value > 0
                 lastPrefillUpdate = Date()
             }
 
@@ -93,6 +108,7 @@ final class StatusMonitor {
            let value = Double(line[Range(match.range(at: 1), in: line)!]) {
             generationTokensPerSecond = value
             prefillTokensPerSecond = 0
+            hasRealThroughput = hasRealThroughput || value > 0
             lastGenerationUpdate = Date()
         }
 
@@ -106,23 +122,7 @@ final class StatusMonitor {
             contextTotal = maxContext
         }
 
-        let snapshot = MetricsSnapshot(
-            timestamp: Date(),
-            prefillTokensPerSecond: prefillTokensPerSecond,
-            generationTokensPerSecond: generationTokensPerSecond,
-            contextUsed: contextUsed,
-            contextTotal: contextTotal,
-            systemMemoryUsedMB: systemMemoryUsedMB,
-            systemMemoryTotalMB: systemMemoryTotalMB,
-            gpuLoadPercent: gpuLoadPercent
-        )
-
-        if history.last == nil || differs(history.last!, snapshot) {
-            history.append(snapshot)
-            if history.count > 1000 {
-                history.removeFirst(history.count - 1000)
-            }
-        }
+        appendSnapshot()
     }
 
     // MARK: - Lifetime metrics
@@ -263,9 +263,65 @@ final class StatusMonitor {
         lhs.gpuLoadPercent != rhs.gpuLoadPercent
     }
 
+    private func appendSnapshot() {
+        let snapshot = MetricsSnapshot(
+            timestamp: Date(),
+            prefillTokensPerSecond: prefillTokensPerSecond,
+            generationTokensPerSecond: generationTokensPerSecond,
+            contextUsed: contextUsed,
+            contextTotal: contextTotal,
+            systemMemoryUsedMB: systemMemoryUsedMB,
+            systemMemoryTotalMB: systemMemoryTotalMB,
+            gpuLoadPercent: gpuLoadPercent
+        )
+
+        if let last = latestSnapshot, differs(last, snapshot) == false {
+            return
+        }
+
+        if historyStorage.count < historyLimit {
+            historyStorage.append(snapshot)
+        } else {
+            historyStorage[historyHead] = snapshot
+            historyHead = (historyHead + 1) % historyLimit
+        }
+    }
+
+    private var latestSnapshot: MetricsSnapshot? {
+        guard !historyStorage.isEmpty else { return nil }
+        let index = (historyHead + historyStorage.count - 1) % historyStorage.count
+        return historyStorage[index]
+    }
+
     // MARK: - System metrics
 
     func collectSystemMetrics() {
+        systemMetricsQueue.async { [weak self] in
+            guard let sample = Self.readMemoryMetrics() else { return }
+            DispatchQueue.main.async {
+                self?.systemMemoryUsedMB = sample.usedMB
+                self?.systemMemoryTotalMB = sample.totalMB
+                self?.appendSnapshot()
+            }
+        }
+    }
+
+    func collectGPU() {
+        systemMetricsQueue.async { [weak self] in
+            let load = Self.readGPUMetrics()
+            DispatchQueue.main.async {
+                self?.gpuLoadPercent = load
+                self?.appendSnapshot()
+            }
+        }
+    }
+
+    private struct MemoryMetrics {
+        let usedMB: Double
+        let totalMB: Double
+    }
+
+    private static func readMemoryMetrics() -> MemoryMetrics? {
         var info = vm_statistics64()
         var count = mach_msg_type_number_t(MemoryLayout<vm_statistics64_data_t>.size / MemoryLayout<integer_t>.size)
         let result = withUnsafeMutablePointer(to: &info) { ptr in
@@ -273,41 +329,38 @@ final class StatusMonitor {
                 host_statistics64(mach_host_self(), HOST_VM_INFO64, p, &count)
             }
         }
-
-        if result == KERN_SUCCESS {
-            let pageSize = vm_page_size
-            let used = Double(info.active_count + info.wire_count) * Double(pageSize) / 1_048_576
-            let total = Double(ProcessInfo.processInfo.physicalMemory) / 1_048_576
-            systemMemoryUsedMB = used
-            systemMemoryTotalMB = total
-        }
+        guard result == KERN_SUCCESS else { return nil }
+        let pageSize = vm_page_size
+        let used = Double(info.active_count + info.wire_count) * Double(pageSize) / 1_048_576
+        let total = Double(ProcessInfo.processInfo.physicalMemory) / 1_048_576
+        return MemoryMetrics(usedMB: used, totalMB: total)
     }
 
-    func collectGPU() {
+    private static func readGPUMetrics() -> Double? {
         let matching = IOServiceMatching("IOAccelerator")
         var iterator: io_iterator_t = 0
         guard IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iterator) == KERN_SUCCESS else {
-            gpuLoadPercent = nil
-            return
+            return nil
         }
         defer { IOObjectRelease(iterator) }
 
+        var load: Double?
         var service: io_object_t = IOIteratorNext(iterator)
         while service != 0 {
             var statistics: Unmanaged<CFMutableDictionary>?
             let ret = IORegistryEntryCreateCFProperties(service, &statistics, kCFAllocatorDefault, 0)
-            if ret == KERN_SUCCESS, let stats = statistics?.takeRetainedValue() as? [String: Any] {
-                if let perfStats = stats["PerformanceStatistics"] as? [String: Any] {
-                    if let gpuUtil = perfStats["GPU Core Utilization"] as? Double {
-                        gpuLoadPercent = min(max(gpuUtil, 0), 100)
-                    } else if let devUtil = perfStats["Device Utilization %"] as? Double {
-                        gpuLoadPercent = min(max(devUtil, 0), 100)
-                    }
+            if ret == KERN_SUCCESS, let stats = statistics?.takeRetainedValue() as? [String: Any],
+               let perfStats = stats["PerformanceStatistics"] as? [String: Any] {
+                if let gpuUtil = perfStats["GPU Core Utilization"] as? Double {
+                    load = min(max(gpuUtil, 0), 100)
+                } else if let devUtil = perfStats["Device Utilization %"] as? Double {
+                    load = min(max(devUtil, 0), 100)
                 }
             }
             IOObjectRelease(service)
             service = IOIteratorNext(iterator)
         }
+        return load
     }
 
     func startTimer() {
@@ -317,6 +370,8 @@ final class StatusMonitor {
         timer?.invalidate()
         let timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             guard let self else { return }
+            // The expensive host-statistics and IOKit walks happen off-main;
+            // only the resulting values are published back to this object.
             collectSystemMetrics()
             collectGPU()
 
@@ -328,22 +383,7 @@ final class StatusMonitor {
                 generationTokensPerSecond = 0
             }
 
-            let snapshot = MetricsSnapshot(
-                timestamp: Date(),
-                prefillTokensPerSecond: prefillTokensPerSecond,
-                generationTokensPerSecond: generationTokensPerSecond,
-                contextUsed: contextUsed,
-                contextTotal: contextTotal,
-                systemMemoryUsedMB: systemMemoryUsedMB,
-                systemMemoryTotalMB: systemMemoryTotalMB,
-                gpuLoadPercent: gpuLoadPercent
-            )
-            if history.last == nil || differs(history.last!, snapshot) {
-                history.append(snapshot)
-                if history.count > 1000 {
-                    history.removeFirst(history.count - 1000)
-                }
-            }
+            appendSnapshot()
         }
         self.timer = timer
         RunLoop.main.add(timer, forMode: .default)
@@ -367,7 +407,9 @@ final class StatusMonitor {
         prefillProgress = nil
         lastGenerationTokenCount = nil
         lastGenerationElapsedSeconds = nil
-        history.removeAll()
+        historyStorage.removeAll()
+        historyHead = 0
+        hasRealThroughput = false
         stopTimer()
     }
 }

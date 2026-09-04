@@ -9,7 +9,7 @@ struct LogView: View {
 
     private var logFont: Font {
         logFontFamily.isEmpty
-            ? .system(size: 12, design: .monospaced)
+            ? .system(size: CGFloat(logFontSize), design: .monospaced)
             : .custom(logFontFamily, size: CGFloat(logFontSize))
     }
 

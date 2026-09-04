@@ -1,4 +1,5 @@
 import SwiftUI
+import HuggingFaceDownloader
 
 // MARK: - Settings Groups
 
@@ -33,8 +34,8 @@ enum SettingsGroup: String, CaseIterable, Identifiable {
 struct ConfigOverlayView: View {
     @Environment(ServerManager.self) private var serverManager
     @Environment(ModelManager.self) private var modelManager
-    @Environment(ModelDownloader.self) private var modelDownloader
     @Environment(ProjectImportManager.self) private var projectImportManager
+    @Environment(ConfigTokenStore.self) private var configTokenStore
 
     @State private var selectedGroup: SettingsGroup = .model
     @State private var showFolderPicker = false
@@ -44,37 +45,41 @@ struct ConfigOverlayView: View {
     @State private var showSaved = false
     @State private var hostCustomMode = false
     @State private var showModelsDirPicker = false
+    @State private var didLoadConfig = false
 
     // Local config mirror for editing
-    @State private var localModelPath: String
-    @State private var localHfToken: String?
-    @State private var localMtpModelPath: String
-    @State private var localEnableMtp: Bool
-    @State private var localContextSize: Int
-    @State private var localPower: Double
-    @State private var localHost: String
-    @State private var localPort: Int
-    @State private var localKvSpace: Int
-    @State private var localSsdStreaming: Bool
-    @State private var localKvDiskPath: String?
+    @State private var localModelPath = ""
+    @State private var localHfToken: String? = nil
+    @State private var localMtpModelPath = ""
+    @State private var localEnableMtp = true
+    @State private var localContextSize = 262144
+    @State private var localPower = 100.0
+    @State private var localHost = "127.0.0.1"
+    @State private var localPort = 1234
+    @State private var localKvSpace = 8192
+    @State private var localSsdStreaming = false
+    @State private var localKvDiskPath: String? = nil
 
     // Interface group preferences (Log view font) — UI prefs, not ServerConfig
     @AppStorage("logFontFamily") private var logFontFamily = ""
     @AppStorage("logFontSize") private var logFontSize = 12
 
-    init() {
-        let config = AppDelegate.sharedServerManager.config
-        _localModelPath = State(initialValue: config.modelPath)
-        _localHfToken = State(initialValue: config.hfToken)
-        _localMtpModelPath = State(initialValue: config.mtpModelPath)
-        _localEnableMtp = State(initialValue: config.enableMtp)
-        _localContextSize = State(initialValue: config.contextSize)
-        _localPower = State(initialValue: Double(config.power))
-        _localHost = State(initialValue: config.host)
-        _localPort = State(initialValue: config.port)
-        _localKvSpace = State(initialValue: config.kvSpace)
-        _localSsdStreaming = State(initialValue: config.ssdStreaming)
-        _localKvDiskPath = State(initialValue: config.kvDiskPath)
+    private func loadConfigIfNeeded() {
+        guard !didLoadConfig else { return }
+        didLoadConfig = true
+        let config = serverManager.config
+        localModelPath = config.modelPath
+        localHfToken = config.hfToken
+        localMtpModelPath = config.mtpModelPath
+        localEnableMtp = config.enableMtp
+        localContextSize = config.contextSize
+        localPower = Double(config.power)
+        localHost = config.host
+        localPort = config.port
+        localKvSpace = config.kvSpace
+        localSsdStreaming = config.ssdStreaming
+        localKvDiskPath = config.kvDiskPath
+        hostCustomMode = config.host != "127.0.0.1"
     }
 
     var body: some View {
@@ -119,6 +124,9 @@ struct ConfigOverlayView: View {
             .formStyle(.grouped)
         }
         .frame(minWidth: 680, minHeight: 480)
+        .onAppear {
+            loadConfigIfNeeded()
+        }
         .sheet(isPresented: $showModelsDirPicker) {
             FolderPicker(completion: { url in
                 showModelsDirPicker = false
@@ -240,11 +248,17 @@ struct ConfigOverlayView: View {
                             .frame(maxWidth: 150)
                             .onChange(of: localHost) { debouncedPersist() }
                     } else {
-                        Text("0.0.0.0")
+                        Text("127.0.0.1")
                             .foregroundStyle(DesignTokens.typeSecondary)
                     }
 
-                    Button(action: { hostCustomMode.toggle() }) {
+                    Button {
+                        hostCustomMode.toggle()
+                        if !hostCustomMode {
+                            localHost = "127.0.0.1"
+                            debouncedPersist()
+                        }
+                    } label: {
                         Image(systemName: hostCustomMode ? "checkmark" : "pencil")
                             .font(.caption)
                     }
@@ -252,7 +266,7 @@ struct ConfigOverlayView: View {
                     .foregroundStyle(DesignTokens.typeSecondary)
                 }
             } label: {
-                rowLabel("Host", caption: "Bind address")
+                rowLabel("Host", caption: "Local-only by default; enter a custom address for LAN access")
             }
 
             LabeledContent {
@@ -380,7 +394,7 @@ struct ConfigOverlayView: View {
 
     private func persistConfig() {
         saveError = nil
-        var config = AppDelegate.sharedServerManager.config
+        var config = serverManager.config
         config.modelPath = localModelPath
         config.hfToken = localHfToken
         config.mtpModelPath = localMtpModelPath
@@ -394,8 +408,12 @@ struct ConfigOverlayView: View {
         config.kvDiskPath = localKvDiskPath
 
         do {
-            try JSONEncoder().encode(config).write(to: PathResolver.configFile)
-            AppDelegate.sharedServerManager.config = config
+            // ConfigTokenStore is the owner of the token field. It uses the
+            // same serialized ConfigStore as the full config writer, and the
+            // shared instance keeps API clients' cache in sync with Settings.
+            try configTokenStore.save(localHfToken ?? "")
+            try serverManager.configStore.save(config)
+            serverManager.config = config
             showSaved = true
             savedStatusTask?.cancel()
             savedStatusTask = Task {

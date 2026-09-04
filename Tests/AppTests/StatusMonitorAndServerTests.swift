@@ -120,6 +120,15 @@ final class StatusMonitorTests: XCTestCase {
         XCTAssertEqual(monitor.history.count, 1)
     }
 
+    func testParsingFiftyThousandLinesKeepsAConstantSizeHistory() {
+        let monitor = StatusMonitor()
+        for i in 1...50_000 {
+            monitor.parse("ctx=0..\(i):\(i)")
+        }
+        XCTAssertEqual(monitor.history.count, 1000)
+        XCTAssertEqual(monitor.history.last?.contextUsed, 50_000)
+    }
+
     func testResetClearsState() {
         let monitor = StatusMonitor()
         monitor.parse("decoding chunk=1.23 t/s avg=45.67 t/s")
@@ -176,5 +185,54 @@ final class ServerManagerTests: XCTestCase {
         XCTAssertEqual(manager.logLines.last?.text, "line 11999")
         // The oldest lines were trimmed away, keeping the most recent 10k.
         XCTAssertEqual(manager.logLines.first?.text, "line 2000")
+    }
+
+    func testMissingBinaryProducesActionableError() {
+        let configURL = appMakeTempDirectory().appendingPathComponent("config.json")
+        let manager = ServerManager(
+            statusMonitor: StatusMonitor(),
+            configStore: ConfigStore(fileURL: configURL),
+            serverBinaryResolver: { _ in nil }
+        )
+        var config = ServerConfig()
+        config.serverBinaryPath = appMakeTempDirectory().appendingPathComponent("does-not-exist").path
+
+        var reportedMessage: String?
+        manager.onError = { reportedMessage = $0 }
+        manager.spawn(config: config)
+
+        XCTAssertEqual(manager.status, .error(exitCode: 127))
+        XCTAssertTrue(reportedMessage?.contains("Could not find ds4-server") == true)
+        XCTAssertTrue(manager.logLines.last?.text.contains("Import a DS4 build") == true)
+    }
+
+    func testRestartWaitsForTheOldProcessToExit() throws {
+        let directory = appMakeTempDirectory()
+        let script = directory.appendingPathComponent("slow-ds4-server")
+        let contents = "#!/bin/sh\ntrap 'sleep 1; exit 0' TERM\nwhile true; do sleep 1; done\n"
+        try Data(contents.utf8).write(to: script)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+
+        let manager = ServerManager(
+            statusMonitor: StatusMonitor(),
+            configStore: ConfigStore(fileURL: directory.appendingPathComponent("config.json"))
+        )
+        var config = ServerConfig()
+        config.serverBinaryPath = script.path
+        config.enableMtp = false
+        defer { manager.stopSynchronously() }
+
+        manager.spawn(config: config)
+        manager.restart()
+
+        let deadline = Date().addingTimeInterval(4)
+        while Date() < deadline {
+            let launches = manager.logLines.filter { $0.text.hasPrefix("slow-ds4-server ") }.count
+            if launches >= 2 { break }
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+
+        let launches = manager.logLines.filter { $0.text.hasPrefix("slow-ds4-server ") }.count
+        XCTAssertGreaterThanOrEqual(launches, 2)
     }
 }

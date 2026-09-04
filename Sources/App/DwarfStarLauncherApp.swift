@@ -12,7 +12,8 @@ extension View {
         modelManager: ModelManager,
         modelDownloader: ModelDownloader,
         projectImportManager: ProjectImportManager,
-        appErrorManager: AppErrorManager
+        appErrorManager: AppErrorManager,
+        configTokenStore: ConfigTokenStore
     ) -> some View {
         self
             .environment(serverManager)
@@ -21,6 +22,7 @@ extension View {
             .environment(modelDownloader)
             .environment(projectImportManager)
             .environment(appErrorManager)
+            .environment(configTokenStore)
     }
 }
 
@@ -57,7 +59,8 @@ struct DwarfStarLauncherApp: App {
             modelManager: AppDelegate.sharedModelManager,
             modelDownloader: AppDelegate.sharedModelDownloader,
             projectImportManager: AppDelegate.sharedProjectImportManager,
-            appErrorManager: AppDelegate.sharedAppErrorManager
+            appErrorManager: AppDelegate.sharedAppErrorManager,
+            configTokenStore: AppDelegate.sharedTokenStore
         )
     }
 }
@@ -65,11 +68,19 @@ struct DwarfStarLauncherApp: App {
 // MARK: - App Delegate
 
 class AppDelegate: NSObject, NSApplicationDelegate {
+    static let sharedConfigStore = ConfigStore()
+    static let sharedTokenStore = ConfigTokenStore(configStore: sharedConfigStore)
     static let sharedStatusMonitor = StatusMonitor()
-    static let sharedServerManager = ServerManager(statusMonitor: sharedStatusMonitor)
+    static let sharedServerManager = ServerManager(
+        statusMonitor: sharedStatusMonitor,
+        configStore: sharedConfigStore
+    )
     static let sharedModelManager = ModelManager()
-    static let sharedModelDownloader = ModelDownloader()
-    static let sharedProjectImportManager = ProjectImportManager()
+    static let sharedModelDownloader = ModelDownloader(
+        huggingFaceClient: DefaultHuggingFaceClient(tokenStore: sharedTokenStore),
+        tokenStore: sharedTokenStore
+    )
+    static let sharedProjectImportManager = ProjectImportManager(configStore: sharedConfigStore)
     static let sharedAppErrorManager = AppErrorManager()
 
     var serverManager: ServerManager { Self.sharedServerManager }
@@ -81,10 +92,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     override init() {
         super.init()
+        Self.sharedServerManager.onError = { message in
+            Self.sharedAppErrorManager.errorMessage = message
+        }
         configureDownloadCallbacks()
         // Warm the in-memory token cache so downloads don't trigger a disk read
         // while a request is being built.
-        _ = ConfigTokenStore().load()
+        _ = Self.sharedTokenStore.load()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

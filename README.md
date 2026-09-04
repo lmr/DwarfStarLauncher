@@ -25,7 +25,7 @@ Zero external dependencies. Built with Swift 5.9+ and SwiftUI for macOS 14.0+.
 
 1. Clone the repo and open the SPM package.
 2. Build with `swift build` or from Xcode.
-3. Place the `ds4-server` binary somewhere on your `PATH`, or set its path in the app's configuration.
+3. Place the `ds4-server` binary at `~/.ds4-launcher/bin/ds4-server`, somewhere on your `PATH`, or set a custom binary path in the app's configuration file.
 4. Launch the app — it will scan for models, let you download new ones, and start the server with one click.
 
 ## Documentation

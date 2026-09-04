@@ -5,37 +5,45 @@ import Observation
 
 @Observable
 public final class ConfigTokenStore {
+    private let configStore: ConfigStore
+    private let cacheLock = NSLock()
+    private var cachedToken: String?
+    private var didLoadToken = false
 
-    // In-memory cache shared across all instances, so the config file is only
-    // read once per session. This avoids repeated disk reads during downloads.
-    private static var cachedToken: String? = nil
-
-    /// Optional override for the config file location. Defaults to the standard
-    /// ~/.config/ds4-launcher/config.json path; tests inject a temp file URL.
-    private let fileURL: URL?
-
-    public init(fileURL: URL? = nil) {
-        self.fileURL = fileURL
+    public init(fileURL: URL? = nil, configStore: ConfigStore? = nil) {
+        self.configStore = configStore ?? ConfigStore(fileURL: fileURL)
     }
 
     public func save(_ newToken: String) throws {
-        Self.cachedToken = newToken.isEmpty ? nil : newToken
-        try writeConfig(token: newToken.isEmpty ? nil : newToken)
+        let token = newToken.isEmpty ? nil : newToken
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        try configStore.updateJSONObject { object in
+            if let token {
+                object["hfToken"] = token
+            } else {
+                object.removeValue(forKey: "hfToken")
+            }
+        }
+        cachedToken = token
+        didLoadToken = true
     }
 
     public func load() -> String? {
-        if let cached = Self.cachedToken {
-            return cached
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if didLoadToken {
+            return cachedToken
         }
 
         let token = readConfigToken()
-        Self.cachedToken = token
+        cachedToken = token
+        didLoadToken = true
         return token
     }
 
     public func delete() throws {
-        Self.cachedToken = nil
-        try writeConfig(token: nil)
+        try save("")
     }
 
     public func exists() -> Bool {
@@ -43,57 +51,12 @@ public final class ConfigTokenStore {
         return !token.isEmpty
     }
 
-    // MARK: - Config File I/O
-
-    private static var defaultConfigFileURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/ds4-launcher/config.json")
-    }
-
-    private var configFileURL: URL {
-        fileURL ?? Self.defaultConfigFileURL
-    }
-
     private func readConfigToken() -> String? {
-        let url = configFileURL
-        guard FileManager.default.fileExists(atPath: url.path),
-              let data = try? Data(contentsOf: url) else { return nil }
-
-        // Decode only the hf_token field to avoid coupling on full ServerConfig schema.
+        // Decode only the hfToken field to avoid coupling on full ServerConfig schema.
         struct TokenWrapper: Decodable {
             let hfToken: String?
         }
-
-        guard let decoded = try? JSONDecoder().decode(TokenWrapper.self, from: data) else {
-            return nil
-        }
+        guard let decoded = configStore.load(TokenWrapper.self) else { return nil }
         return decoded.hfToken?.isEmpty == true ? nil : decoded.hfToken
-    }
-
-    private func writeConfig(token: String?) throws {
-        // Read existing config (if any), update hf_token, and write back.
-        let url = configFileURL
-        var dict: [String: Any] = [:]
-
-        if FileManager.default.fileExists(atPath: url.path),
-           let data = try? Data(contentsOf: url),
-           let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            dict = existing
-        }
-
-        if let token, !token.isEmpty {
-            dict["hfToken"] = token
-        } else {
-            dict.removeValue(forKey: "hfToken")
-        }
-
-        try FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true,
-            attributes: nil
-        )
-
-        let data = try JSONSerialization.data(withJSONObject: dict)
-        try data.write(to: url, options: .atomic)
     }
 }

@@ -4,9 +4,23 @@ import Charts
 // MARK: - Chart Data Point (used by dashboard decode chart)
 
 struct ChartPoint: Identifiable {
-    let id = UUID()
+    let id: String
     let timestamp: Date
     let value: Double
+
+    init(timestamp: Date, value: Double, series: String) {
+        self.id = "\(series)-\(timestamp.timeIntervalSinceReferenceDate)"
+        self.timestamp = timestamp
+        self.value = value
+    }
+}
+
+private struct DashboardChartData {
+    let prefill: [ChartPoint]
+    let generation: [ChartPoint]
+    let context: [ChartPoint]
+    let memory: [ChartPoint]
+    let gpu: [ChartPoint]
 }
 
 struct DashboardView: View {
@@ -20,7 +34,7 @@ struct DashboardView: View {
     // MARK: - Warm-up gating
 
     private var hasRealGeneration: Bool {
-        statusMonitor.history.contains { $0.generationTokensPerSecond > 0 || $0.prefillTokensPerSecond > 0 }
+        statusMonitor.hasRealThroughput
     }
 
     private var warmUpComplete: Bool {
@@ -90,51 +104,32 @@ struct DashboardView: View {
 
     // MARK: - Metric chart data
 
-    private var recentPrefillData: [ChartPoint] {
+    private var chartData: DashboardChartData {
         let cutoff = Date().addingTimeInterval(-60)
-        return statusMonitor.history
-            .filter { $0.timestamp >= cutoff }
-            .map { snap in
-                ChartPoint(timestamp: snap.timestamp, value: snap.prefillTokensPerSecond)
-            }
-    }
+        // `history` is time ordered, so take only the bounded tail and stop
+        // discarding once the one-minute window begins. Each of the five
+        // series is built in this single pass per view update.
+        let snapshots = statusMonitor.history.suffix(1000).drop(while: { $0.timestamp < cutoff })
+        var prefill: [ChartPoint] = []
+        var generation: [ChartPoint] = []
+        var context: [ChartPoint] = []
+        var memory: [ChartPoint] = []
+        var gpu: [ChartPoint] = []
 
-    private var recentGenData: [ChartPoint] {
-        let cutoff = Date().addingTimeInterval(-60)
-        return statusMonitor.history
-            .filter { $0.timestamp >= cutoff }
-            .map { snap in
-                ChartPoint(timestamp: snap.timestamp, value: snap.generationTokensPerSecond)
+        for snap in snapshots {
+            prefill.append(ChartPoint(timestamp: snap.timestamp, value: snap.prefillTokensPerSecond, series: "prefill"))
+            generation.append(ChartPoint(timestamp: snap.timestamp, value: snap.generationTokensPerSecond, series: "generation"))
+            if let used = snap.contextUsed, let total = snap.contextTotal, total > 0 {
+                context.append(ChartPoint(timestamp: snap.timestamp, value: Double(used) / Double(total) * 100, series: "context"))
             }
-    }
-
-    private var recentContextData: [ChartPoint] {
-        let cutoff = Date().addingTimeInterval(-60)
-        return statusMonitor.history
-            .filter { $0.timestamp >= cutoff }
-            .compactMap { snap in
-                guard let used = snap.contextUsed, let total = snap.contextTotal, total > 0 else { return nil }
-                return ChartPoint(timestamp: snap.timestamp, value: Double(used) / Double(total) * 100)
+            if let used = snap.systemMemoryUsedMB, let total = snap.systemMemoryTotalMB, total > 0 {
+                memory.append(ChartPoint(timestamp: snap.timestamp, value: used / total * 100, series: "memory"))
             }
-    }
-
-    private var recentMemoryData: [ChartPoint] {
-        let cutoff = Date().addingTimeInterval(-60)
-        return statusMonitor.history
-            .filter { $0.timestamp >= cutoff }
-            .compactMap { snap in
-                guard let used = snap.systemMemoryUsedMB, let total = snap.systemMemoryTotalMB, total > 0 else { return nil }
-                return ChartPoint(timestamp: snap.timestamp, value: used / total * 100)
+            if let value = snap.gpuLoadPercent {
+                gpu.append(ChartPoint(timestamp: snap.timestamp, value: value, series: "gpu"))
             }
-    }
-
-    private var recentGPUData: [ChartPoint] {
-        let cutoff = Date().addingTimeInterval(-60)
-        return statusMonitor.history
-            .filter { $0.timestamp >= cutoff }
-            .compactMap { snap in
-                snap.gpuLoadPercent.map { ChartPoint(timestamp: snap.timestamp, value: $0) }
-            }
+        }
+        return DashboardChartData(prefill: prefill, generation: generation, context: context, memory: memory, gpu: gpu)
     }
 
     // MARK: - Lifetime metrics
@@ -216,6 +211,7 @@ struct DashboardView: View {
     // MARK: - Body
 
     var body: some View {
+        let data = chartData
         ScrollView {
             VStack(spacing: DesignTokens.Spacing.s5) {
                 lifetimeMetricsCard
@@ -253,10 +249,11 @@ struct DashboardView: View {
 
                     // Metric charts — always visible (permanent)
                     VStack(spacing: DesignTokens.Spacing.s4) {
-                        metricChart(title: "Prefill Speed", data: recentPrefillData)
-                        metricChart(title: "Generation Speed", data: recentGenData)
-                        metricChart(title: "System Memory", data: recentMemoryData)
-                        metricChart(title: "GPU Load", data: recentGPUData)
+                        metricChart(title: "Prefill Speed", data: data.prefill)
+                        metricChart(title: "Generation Speed", data: data.generation)
+                        metricChart(title: "Context Usage", data: data.context)
+                        metricChart(title: "System Memory", data: data.memory)
+                        metricChart(title: "GPU Load", data: data.gpu)
                     }
                     .padding(.horizontal, DesignTokens.Spacing.s4)
 

@@ -7,12 +7,39 @@ struct ServerConfig: Codable, Equatable {
     var enableMtp: Bool = true
     var contextSize: Int = 262144
     var power: Int = 100
-    var host: String = "0.0.0.0"
+    var host: String = "127.0.0.1"
     var port: Int = 1234
     var kvSpace: Int = 8192
     var ssdStreaming: Bool = false
     var kvDiskPath: String?
     var importPath: String?
+    var serverBinaryPath: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case modelPath, hfToken, mtpModelPath, enableMtp, contextSize, power
+        case host, port, kvSpace, ssdStreaming, kvDiskPath, importPath
+        case serverBinaryPath
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        modelPath = try container.decodeIfPresent(String.self, forKey: .modelPath) ?? ""
+        hfToken = try container.decodeIfPresent(String.self, forKey: .hfToken)
+        mtpModelPath = try container.decodeIfPresent(String.self, forKey: .mtpModelPath)
+            ?? "\(NSHomeDirectory())/.ds4-launcher/models/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf"
+        enableMtp = try container.decodeIfPresent(Bool.self, forKey: .enableMtp) ?? true
+        contextSize = try container.decodeIfPresent(Int.self, forKey: .contextSize) ?? 262144
+        power = try container.decodeIfPresent(Int.self, forKey: .power) ?? 100
+        host = try container.decodeIfPresent(String.self, forKey: .host) ?? "127.0.0.1"
+        port = try container.decodeIfPresent(Int.self, forKey: .port) ?? 1234
+        kvSpace = try container.decodeIfPresent(Int.self, forKey: .kvSpace) ?? 8192
+        ssdStreaming = try container.decodeIfPresent(Bool.self, forKey: .ssdStreaming) ?? false
+        kvDiskPath = try container.decodeIfPresent(String.self, forKey: .kvDiskPath)
+        importPath = try container.decodeIfPresent(String.self, forKey: .importPath)
+        serverBinaryPath = try container.decodeIfPresent(String.self, forKey: .serverBinaryPath)
+    }
 
     func buildArguments() -> [String] {
         var args: [String] = []

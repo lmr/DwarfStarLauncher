@@ -69,12 +69,13 @@ final class ConfigTokenStoreTests: XCTestCase {
         XCTAssertEqual(makeStore().load(), "hf_persisted")
     }
 
-    func testCacheIsSharedAcrossInstances() throws {
+    func testSeparateInstancesReadTheSamePersistedToken() throws {
         resetTokenCache()
         let first = makeStore()
         try first.save("hf_cached")
 
-        // A second instance must observe the cached value without touching disk.
+        // Each instance owns its cache; the shared ConfigStore writer keeps the
+        // persisted file consistent across instances.
         XCTAssertEqual(makeStore().load(), "hf_cached")
     }
 

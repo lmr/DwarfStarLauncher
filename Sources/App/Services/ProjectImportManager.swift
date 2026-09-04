@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import HuggingFaceDownloader
 
 @Observable
 final class ProjectImportManager {
@@ -10,8 +11,10 @@ final class ProjectImportManager {
     var alertMessage: String? = nil
 
     private let binaries = ["ds4", "ds4-agent", "ds4-bench", "ds4-eval", "ds4-server"]
+    private let configStore: ConfigStore
 
-    init() {
+    init(configStore: ConfigStore = ConfigStore()) {
+        self.configStore = configStore
         loadImportPathFromConfig()
     }
 
@@ -108,25 +111,26 @@ final class ProjectImportManager {
         // This is handled in the UI layer — this method clears so the UI
         // knows to present the picker again on next Import tap.
         importPath = nil
+        persistImportPath()
     }
 
     // MARK: - Persistence
 
     private func loadImportPathFromConfig() {
-        let file = PathResolver.configFile
-        guard FileManager.default.fileExists(atPath: file.path) else { return }
-        guard let data = try? Data(contentsOf: file) else { return }
-        guard let decoded = try? JSONDecoder().decode(ServerConfig.self, from: data) else { return }
-        importPath = decoded.importPath
+        importPath = configStore.load(ServerConfig.self)?.importPath
     }
 
     private func persistImportPath() {
-        let file = PathResolver.configFile
-        guard FileManager.default.fileExists(atPath: file.path) else { return }
-        guard let data = try? Data(contentsOf: file) else { return }
-        guard var config = try? JSONDecoder().decode(ServerConfig.self, from: data) else { return }
-        config.importPath = importPath
-        guard let newData = try? JSONEncoder().encode(config) else { return }
-        try? newData.write(to: file, options: .atomic)
+        do {
+            try configStore.updateJSONObject { object in
+                if let importPath {
+                    object["importPath"] = importPath
+                } else {
+                    object.removeValue(forKey: "importPath")
+                }
+            }
+        } catch {
+            alertMessage = "Failed to save import path: \(error.localizedDescription)"
+        }
     }
 }

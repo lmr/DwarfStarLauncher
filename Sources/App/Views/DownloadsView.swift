@@ -117,9 +117,14 @@ struct DownloadsView: View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.s2) {
             // Always-present linear bar: 0 idle, percent/100 in progress, 1.0 complete,
             // danger tint on error. Stable height across all download states.
-            ProgressView(value: progressValue(for: target))
-                .progressViewStyle(.linear)
-                .tint(progressTint(for: target))
+            if case .progress(_, _, let totalBytes, _, _) = modelDownloader.downloadState(for: target), totalBytes <= 0 {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                ProgressView(value: progressValue(for: target))
+                    .progressViewStyle(.linear)
+                    .tint(progressTint(for: target))
+            }
 
             if case .progress(_, let bytesDownloaded, let totalBytes, let speed, let eta) = modelDownloader.downloadState(for: target) {
                 HStack(spacing: DesignTokens.Spacing.s3) {
@@ -148,7 +153,7 @@ struct DownloadsView: View {
         case .idle:
             return 0
         case .progress(let percent, _, _, _, _):
-            return percent / 100.0
+            return min(max(percent / 100.0, 0), 1)
         case .complete:
             return 1.0
         case .error, .failed:
@@ -208,68 +213,56 @@ struct DownloadsView: View {
 
     // MARK: - File Status Row
 
+    @ViewBuilder
     private func fileStatusRow(for target: DownloadTarget) -> some View {
         let downloadedCount = modelDownloader.downloadedFileCount(for: target)
         let totalCount = target.files.count
 
         if downloadedCount < totalCount {
-            return AnyView(
-                MetricRow(
-                    label: "Files",
-                    value: "\(downloadedCount)/\(totalCount)",
-                    valueTint: DesignTokens.warning
-                )
+            MetricRow(
+                label: "Files",
+                value: "\(downloadedCount)/\(totalCount)",
+                valueTint: DesignTokens.warning
             )
         } else {
-            return AnyView(
-                MetricRow(
-                    label: "Files",
-                    value: "All downloaded",
-                    valueTint: DesignTokens.success
-                )
+            MetricRow(
+                label: "Files",
+                value: "All downloaded",
+                valueTint: DesignTokens.success
             )
         }
     }
 
     // MARK: - Action Row
 
+    @ViewBuilder
     private func actionRow(for target: DownloadTarget) -> some View {
         let state = modelDownloader.downloadState(for: target)
 
-        return AnyView(
-            HStack {
-                switch state {
-                case .idle, .error, .failed:
-                    Button(hasPartialFiles(target) ? "Resume" : "Download") {
-                        // Auto-expand the category so progress is never hidden.
-                        expanded.insert(target.category)
-                        modelDownloader.download(target: target)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-
-                case .progress:
-                    Button("Cancel") {
-                        modelDownloader.cancel()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.secondary)
-                    .controlSize(.small)
-
-                case .complete:
-                    Text("Complete")
-                        .font(.caption)
-                        .foregroundStyle(DesignTokens.success)
+        HStack {
+            switch state {
+            case .idle, .error, .failed:
+                Button(modelDownloader.hasPartialFiles(target) ? "Resume" : "Download") {
+                    // Auto-expand the category so progress is never hidden.
+                    expanded.insert(target.category)
+                    modelDownloader.download(target: target)
                 }
-            }
-        )
-    }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
 
-    private func hasPartialFiles(_ target: DownloadTarget) -> Bool {
-        target.files.contains { file in
-            let partURL = PathResolver.partFileURL(for: file.localName)
-            guard let attrs = try? FileManager.default.attributesOfItem(atPath: partURL.path) else { return false }
-            return (attrs[.size] as? Int64 ?? 0) > 0
+            case .progress:
+                Button("Cancel") {
+                    modelDownloader.cancel()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.secondary)
+                .controlSize(.small)
+
+            case .complete:
+                Text("Complete")
+                    .font(.caption)
+                    .foregroundStyle(DesignTokens.success)
+            }
         }
     }
 

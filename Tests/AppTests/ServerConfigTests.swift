@@ -4,6 +4,10 @@ import Foundation
 
 final class ServerConfigTests: XCTestCase {
 
+    func testDefaultHostIsLocalOnly() {
+        XCTAssertEqual(ServerConfig().host, "127.0.0.1")
+    }
+
     /// Builds a fully-populated config with a plain model path.
     private func makeBaseConfig() -> ServerConfig {
         var config = ServerConfig()

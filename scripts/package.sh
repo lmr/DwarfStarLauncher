@@ -1,6 +1,10 @@
 #!/bin/bash
 set -e
 
+# Packaging script for DwarfStarLauncher.
+# Produces DwarfStarLauncher.app; optionally a DMG with --dmg.
+# The bundle is ad-hoc signed for local execution. Distribution
+# notarization is out of scope and must be handled separately.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
@@ -33,6 +37,8 @@ cp Resources/Info.plist "$BUNDLE/Contents/Info.plist"
 cp Resources/AppIcon/AppIcon.icns "$BUNDLE/Contents/Resources/AppIcon.icns"
 
 chmod +x "$BUNDLE/Contents/MacOS/App"
+
+codesign --force --sign - --options runtime "$BUNDLE" || echo "codesign skipped"
 
 echo "==> Done: $BUNDLE"
 echo "    Contents/MacOS/App"
