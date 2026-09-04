@@ -206,6 +206,27 @@ final class ServerManagerTests: XCTestCase {
         XCTAssertTrue(manager.logLines.last?.text.contains("Import a DS4 build") == true)
     }
 
+    func testMissingVisionEncoderPreventsLaunch() {
+        let configURL = appMakeTempDirectory().appendingPathComponent("config.json")
+        let manager = ServerManager(
+            statusMonitor: StatusMonitor(),
+            configStore: ConfigStore(fileURL: configURL),
+            serverBinaryResolver: { _ in URL(fileURLWithPath: "/bin/sh") }
+        )
+        var config = ServerConfig()
+        config.modelPath = "/tmp/model.gguf"
+        config.visionEncoderPath = "/tmp/does-not-exist-vision-encoder.gguf"
+        config.enableMtp = false
+
+        var reportedMessage: String?
+        manager.onError = { reportedMessage = $0 }
+        manager.spawn(config: config)
+
+        XCTAssertEqual(manager.status, .error(exitCode: 127))
+        XCTAssertTrue(reportedMessage?.contains("Vision encoder not found") == true)
+        XCTAssertTrue(manager.logLines.last?.text.contains("vision encoder") == true)
+    }
+
     func testRestartWaitsForTheOldProcessToExit() throws {
         let directory = appMakeTempDirectory()
         let script = directory.appendingPathComponent("slow-ds4-server")

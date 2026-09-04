@@ -32,6 +32,28 @@ final class ServerConfigTests: XCTestCase {
         ])
     }
 
+    func testBuildArgumentsIncludesVisionEncoder() {
+        var config = makeBaseConfig()
+        config.visionEncoderPath = "/tmp/DeepSeek-V4-Flash-Vision-Encoder.gguf"
+
+        let args = config.buildArguments()
+        XCTAssertEqual(args, [
+            "--model", "/tmp/model.gguf",
+            "--vision", "/tmp/DeepSeek-V4-Flash-Vision-Encoder.gguf",
+            "--ctx", "262144",
+            "--power", "100",
+            "--host", "0.0.0.0",
+            "--port", "1234"
+        ])
+    }
+
+    func testBuildArgumentsOmitsEmptyVisionEncoderPath() {
+        var config = makeBaseConfig()
+        config.visionEncoderPath = "  \n"
+
+        XCTAssertFalse(config.buildArguments().contains("--vision"))
+    }
+
     func testBuildArgumentsIncludesMtpDraftForRegularPath() {
         var config = makeBaseConfig()
         config.enableMtp = true

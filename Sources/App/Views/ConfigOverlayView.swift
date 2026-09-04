@@ -1,4 +1,6 @@
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 import HuggingFaceDownloader
 
 // MARK: - Settings Groups
@@ -49,6 +51,7 @@ struct ConfigOverlayView: View {
 
     // Local config mirror for editing
     @State private var localModelPath = ""
+    @State private var localVisionEncoderPath: String? = nil
     @State private var localHfToken: String? = nil
     @State private var localMtpModelPath = ""
     @State private var localEnableMtp = true
@@ -69,6 +72,7 @@ struct ConfigOverlayView: View {
         didLoadConfig = true
         let config = serverManager.config
         localModelPath = config.modelPath
+        localVisionEncoderPath = config.visionEncoderPath
         localHfToken = config.hfToken
         localMtpModelPath = config.mtpModelPath
         localEnableMtp = config.enableMtp
@@ -159,6 +163,42 @@ struct ConfigOverlayView: View {
         Section {
             ModelPickerView(path: $localModelPath)
                 .environment(modelManager)
+
+            LabeledContent {
+                HStack(spacing: 8) {
+                    TextField(
+                        "Optional vision encoder GGUF",
+                        text: Binding(
+                            get: { localVisionEncoderPath ?? "" },
+                            set: { value in
+                                localVisionEncoderPath = value.isEmpty ? nil : value
+                            }
+                        )
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 300)
+                    .onChange(of: localVisionEncoderPath) { debouncedPersist() }
+
+                    Button("Choose…") {
+                        chooseVisionEncoder()
+                    }
+                    .controlSize(.small)
+
+                    if localVisionEncoderPath != nil {
+                        Button("Clear") {
+                            localVisionEncoderPath = nil
+                            debouncedPersist()
+                        }
+                        .controlSize(.small)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+            } label: {
+                rowLabel(
+                    "Vision Encoder",
+                    caption: "Optional sidecar passed as --vision; requires a matching Vision-Exp model"
+                )
+            }
 
             LabeledContent {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -390,12 +430,29 @@ struct ConfigOverlayView: View {
         showModelsDirPicker = true
     }
 
+    private func chooseVisionEncoder() {
+        let panel = NSOpenPanel()
+        panel.title = "Select Vision Encoder"
+        panel.prompt = "Choose"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        if let ggufType = UTType(filenameExtension: "gguf") {
+            panel.allowedContentTypes = [ggufType]
+        }
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        localVisionEncoderPath = url.path
+        debouncedPersist()
+    }
+
     // MARK: - Actions
 
     private func persistConfig() {
         saveError = nil
         var config = serverManager.config
         config.modelPath = localModelPath
+        config.visionEncoderPath = localVisionEncoderPath
         config.hfToken = localHfToken
         config.mtpModelPath = localMtpModelPath
         config.enableMtp = localEnableMtp

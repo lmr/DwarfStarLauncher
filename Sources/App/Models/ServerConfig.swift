@@ -2,6 +2,9 @@ import Foundation
 
 struct ServerConfig: Codable, Equatable {
     var modelPath: String = ""
+    /// Optional vision sidecar GGUF passed to ds4-server as `--vision`.
+    /// This is intentionally independent from the main model and MTP paths.
+    var visionEncoderPath: String?
     var hfToken: String?
     var mtpModelPath: String = "\(NSHomeDirectory())/.ds4-launcher/models/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf"
     var enableMtp: Bool = true
@@ -16,7 +19,7 @@ struct ServerConfig: Codable, Equatable {
     var serverBinaryPath: String?
 
     private enum CodingKeys: String, CodingKey {
-        case modelPath, hfToken, mtpModelPath, enableMtp, contextSize, power
+        case modelPath, visionEncoderPath, hfToken, mtpModelPath, enableMtp, contextSize, power
         case host, port, kvSpace, ssdStreaming, kvDiskPath, importPath
         case serverBinaryPath
     }
@@ -26,6 +29,7 @@ struct ServerConfig: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         modelPath = try container.decodeIfPresent(String.self, forKey: .modelPath) ?? ""
+        visionEncoderPath = try container.decodeIfPresent(String.self, forKey: .visionEncoderPath)
         hfToken = try container.decodeIfPresent(String.self, forKey: .hfToken)
         mtpModelPath = try container.decodeIfPresent(String.self, forKey: .mtpModelPath)
             ?? "\(NSHomeDirectory())/.ds4-launcher/models/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf"
@@ -44,6 +48,10 @@ struct ServerConfig: Codable, Equatable {
     func buildArguments() -> [String] {
         var args: [String] = []
         args.append(contentsOf: ["--model", modelPath])
+        if let path = visionEncoderPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !path.isEmpty {
+            args.append(contentsOf: ["--vision", path])
+        }
         args.append(contentsOf: ["--ctx", String(contextSize)])
         args.append(contentsOf: ["--power", String(power)])
         if enableMtp {

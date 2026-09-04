@@ -13,6 +13,7 @@ final class ConfigStoreTests: XCTestCase {
         let config = try XCTUnwrap(store.load(ServerConfig.self))
         XCTAssertEqual(config.hfToken, "hf_test")
         XCTAssertEqual(config.modelPath, "")
+        XCTAssertNil(config.visionEncoderPath)
         XCTAssertEqual(config.host, "127.0.0.1")
         XCTAssertEqual(config.port, 1234)
         XCTAssertTrue(config.enableMtp)
