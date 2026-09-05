@@ -226,41 +226,6 @@ struct ConfigOverlayView: View {
                 rowLabel("Vision Model Location", caption: "Vision encoders are stored in the vision subdirectory")
             }
 
-            LabeledContent {
-                HStack(spacing: 8) {
-                    TextField(
-                        "Optional vision encoder GGUF",
-                        text: Binding(
-                            get: { localVisionEncoderPath ?? "" },
-                            set: { value in
-                                localVisionEncoderPath = value.isEmpty ? nil : value
-                            }
-                        )
-                    )
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 300)
-                    .onChange(of: localVisionEncoderPath) { debouncedPersist() }
-
-                    Button("Choose…") {
-                        chooseVisionEncoder()
-                    }
-                    .controlSize(.small)
-
-                    if localVisionEncoderPath != nil {
-                        Button("Clear") {
-                            localVisionEncoderPath = nil
-                            debouncedPersist()
-                        }
-                        .controlSize(.small)
-                        .foregroundStyle(.secondary)
-                    }
-                }
-            } label: {
-                rowLabel(
-                    "Selected Encoder",
-                    caption: "Passed as --vision; use a matching Vision-Exp language model"
-                )
-            }
         } header: {
             Text("Vision Encoder")
         }
