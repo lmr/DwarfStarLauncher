@@ -14,6 +14,7 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertEqual(config.hfToken, "hf_test")
         XCTAssertEqual(config.modelPath, "")
         XCTAssertNil(config.visionEncoderPath)
+        XCTAssertFalse(config.enableVision)
         XCTAssertEqual(config.host, "127.0.0.1")
         XCTAssertEqual(config.port, 1234)
         XCTAssertTrue(config.enableMtp)

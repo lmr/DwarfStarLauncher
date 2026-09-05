@@ -34,6 +34,7 @@ final class ServerConfigTests: XCTestCase {
 
     func testBuildArgumentsIncludesVisionEncoder() {
         var config = makeBaseConfig()
+        config.enableVision = true
         config.visionEncoderPath = "/tmp/DeepSeek-V4-Flash-Vision-Encoder.gguf"
 
         let args = config.buildArguments()
@@ -49,7 +50,15 @@ final class ServerConfigTests: XCTestCase {
 
     func testBuildArgumentsOmitsEmptyVisionEncoderPath() {
         var config = makeBaseConfig()
+        config.enableVision = true
         config.visionEncoderPath = "  \n"
+
+        XCTAssertFalse(config.buildArguments().contains("--vision"))
+    }
+
+    func testBuildArgumentsOmitsVisionEncoderWhenDisabled() {
+        var config = makeBaseConfig()
+        config.visionEncoderPath = "/tmp/DeepSeek-V4-Flash-Vision-Encoder.gguf"
 
         XCTAssertFalse(config.buildArguments().contains("--vision"))
     }

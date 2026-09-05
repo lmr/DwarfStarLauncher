@@ -215,6 +215,7 @@ final class ServerManagerTests: XCTestCase {
         )
         var config = ServerConfig()
         config.modelPath = "/tmp/model.gguf"
+        config.enableVision = true
         config.visionEncoderPath = "/tmp/does-not-exist-vision-encoder.gguf"
         config.enableMtp = false
 

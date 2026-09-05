@@ -54,6 +54,7 @@ struct ConfigOverlayView: View {
     // Local config mirror for editing
     @State private var localModelPath = ""
     @State private var localVisionEncoderPath: String? = nil
+    @State private var localEnableVision = false
     @State private var localHfToken: String? = nil
     @State private var localMtpModelPath = ""
     @State private var localEnableMtp = true
@@ -75,6 +76,7 @@ struct ConfigOverlayView: View {
         let config = serverManager.config
         localModelPath = config.modelPath
         localVisionEncoderPath = config.visionEncoderPath
+        localEnableVision = config.enableVision
         localHfToken = config.hfToken
         localMtpModelPath = config.mtpModelPath
         localEnableMtp = config.enableMtp
@@ -216,6 +218,7 @@ struct ConfigOverlayView: View {
         Section {
             VisionModelPickerView(path: $localVisionEncoderPath)
                 .environment(modelManager)
+                .onChange(of: localVisionEncoderPath) { debouncedPersist() }
 
             LabeledContent {
                 Text(PathResolver.visionModelsDir.path)
@@ -224,6 +227,15 @@ struct ConfigOverlayView: View {
                     .foregroundStyle(.secondary)
             } label: {
                 rowLabel("Vision Model Location", caption: "Vision encoders are stored in the vision subdirectory")
+            }
+
+            LabeledContent {
+                Toggle("", isOn: $localEnableVision)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .onChange(of: localEnableVision) { debouncedPersist() }
+            } label: {
+                rowLabel("Enable Vision", caption: "Use the selected encoder with a matching Vision-Exp model")
             }
 
         } header: {
@@ -442,6 +454,7 @@ struct ConfigOverlayView: View {
         var config = serverManager.config
         config.modelPath = localModelPath
         config.visionEncoderPath = localVisionEncoderPath
+        config.enableVision = localEnableVision
         config.hfToken = localHfToken
         config.mtpModelPath = localMtpModelPath
         config.enableMtp = localEnableMtp

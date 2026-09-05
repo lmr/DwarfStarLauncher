@@ -76,23 +76,38 @@ final class ServerManager {
             }
         }
 
-        if let rawVisionPath = launchConfig.visionEncoderPath {
-            let trimmedVisionPath = rawVisionPath.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmedVisionPath.isEmpty {
-                launchConfig.visionEncoderPath = nil
-            } else {
-                let visionPath = (trimmedVisionPath as NSString).expandingTildeInPath
-                guard FileManager.default.isReadableFile(atPath: visionPath) else {
-                    reportLaunchError(
-                        "Vision encoder not found or unreadable at \(visionPath). " +
-                        "Choose a valid DeepSeek/GLM vision encoder GGUF in Settings."
-                    )
-                    return
-                }
-                // NSOpenPanel stores absolute paths, but normalize manually
-                // entered `~` paths before handing them to Process.
-                launchConfig.visionEncoderPath = visionPath
+        if launchConfig.enableVision {
+            guard let rawVisionPath = launchConfig.visionEncoderPath else {
+                reportLaunchError(
+                    "Vision is enabled but no vision encoder is selected. " +
+                    "Choose a valid DeepSeek/GLM vision encoder GGUF in Settings."
+                )
+                return
             }
+            let trimmedVisionPath = rawVisionPath.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedVisionPath.isEmpty else {
+                reportLaunchError(
+                    "Vision is enabled but no vision encoder is selected. " +
+                    "Choose a valid DeepSeek/GLM vision encoder GGUF in Settings."
+                )
+                return
+            }
+
+            let visionPath = (trimmedVisionPath as NSString).expandingTildeInPath
+            guard FileManager.default.isReadableFile(atPath: visionPath) else {
+                reportLaunchError(
+                    "Vision encoder not found or unreadable at \(visionPath). " +
+                    "Choose a valid DeepSeek/GLM vision encoder GGUF in Settings."
+                )
+                return
+            }
+            // NSOpenPanel stores absolute paths, but normalize manually
+            // entered `~` paths before handing them to Process.
+            launchConfig.visionEncoderPath = visionPath
+        } else {
+            // Keep a disabled path in the persisted config so re-enabling the
+            // feature does not require selecting the encoder again.
+            launchConfig.visionEncoderPath = nil
         }
 
         self.config = config
