@@ -9,6 +9,9 @@ struct ServerConfig: Codable, Equatable {
     var hfToken: String?
     var mtpModelPath: String = "\(NSHomeDirectory())/.ds4-launcher/models/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf"
     var enableMtp: Bool = true
+    /// Enables model-embedded MTP with ds4's boolean `--mtp` flag (used by
+    /// Qwen3.8-Flash-Next), rather than loading an external support GGUF.
+    var useEmbeddedMtp: Bool = false
     var contextSize: Int = 262144
     var power: Int = 100
     var host: String = "127.0.0.1"
@@ -20,7 +23,8 @@ struct ServerConfig: Codable, Equatable {
     var serverBinaryPath: String?
 
     private enum CodingKeys: String, CodingKey {
-        case modelPath, visionEncoderPath, enableVision, hfToken, mtpModelPath, enableMtp, contextSize, power
+        case modelPath, visionEncoderPath, enableVision, hfToken
+        case mtpModelPath, enableMtp, useEmbeddedMtp, contextSize, power
         case host, port, kvSpace, ssdStreaming, kvDiskPath, importPath
         case serverBinaryPath
     }
@@ -36,6 +40,7 @@ struct ServerConfig: Codable, Equatable {
         mtpModelPath = try container.decodeIfPresent(String.self, forKey: .mtpModelPath)
             ?? "\(NSHomeDirectory())/.ds4-launcher/models/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf"
         enableMtp = try container.decodeIfPresent(Bool.self, forKey: .enableMtp) ?? true
+        useEmbeddedMtp = try container.decodeIfPresent(Bool.self, forKey: .useEmbeddedMtp) ?? false
         contextSize = try container.decodeIfPresent(Int.self, forKey: .contextSize) ?? 262144
         power = try container.decodeIfPresent(Int.self, forKey: .power) ?? 100
         host = try container.decodeIfPresent(String.self, forKey: .host) ?? "127.0.0.1"
@@ -57,11 +62,15 @@ struct ServerConfig: Codable, Equatable {
         }
         args.append(contentsOf: ["--ctx", String(contextSize)])
         args.append(contentsOf: ["--power", String(power)])
-        if enableMtp {
+        if useEmbeddedMtp {
+            // Qwen3.8's MTP weights live in the main GGUF. This setting is
+            // intentionally independent from the external-MTP toggle/path.
+            args.append("--mtp")
+        } else if enableMtp {
             if mtpModelPath.localizedStandardContains("dspark") {
-                args.append(contentsOf: ["--dspark", "--mtp", mtpModelPath])
+                args.append(contentsOf: ["--dspark", "--mtp-model", mtpModelPath])
             } else {
-                args.append(contentsOf: ["--mtp", mtpModelPath, "--mtp-draft", "2"])
+                args.append(contentsOf: ["--mtp-model", mtpModelPath, "--mtp-draft", "2"])
             }
         }
 

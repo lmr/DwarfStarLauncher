@@ -69,8 +69,9 @@ final class ServerConfigTests: XCTestCase {
         config.mtpModelPath = "/tmp/DeepSeek-V4-Flash-MTP.gguf"
 
         let args = config.buildArguments()
-        XCTAssertTrue(args.contains("--mtp"))
-        XCTAssertEqual(args[args.firstIndex(of: "--mtp")! + 1], "/tmp/DeepSeek-V4-Flash-MTP.gguf")
+        XCTAssertTrue(args.contains("--mtp-model"))
+        XCTAssertEqual(args[args.firstIndex(of: "--mtp-model")! + 1], "/tmp/DeepSeek-V4-Flash-MTP.gguf")
+        XCTAssertFalse(args.contains("--mtp"))
         XCTAssertTrue(args.contains("--mtp-draft"))
         XCTAssertEqual(args[args.firstIndex(of: "--mtp-draft")! + 1], "2")
     }
@@ -82,9 +83,31 @@ final class ServerConfigTests: XCTestCase {
 
         let args = config.buildArguments()
         XCTAssertTrue(args.contains("--dspark"))
-        XCTAssertTrue(args.contains("--mtp"))
-        XCTAssertEqual(args[args.firstIndex(of: "--mtp")! + 1], "/tmp/DSPARK-support.gguf")
+        XCTAssertTrue(args.contains("--mtp-model"))
+        XCTAssertEqual(args[args.firstIndex(of: "--mtp-model")! + 1], "/tmp/DSPARK-support.gguf")
         XCTAssertFalse(args.contains("--mtp-draft"))
+    }
+
+    func testBuildArgumentsUsesEmbeddedMtpFlag() {
+        var config = makeBaseConfig()
+        config.enableMtp = true
+        config.useEmbeddedMtp = true
+        config.mtpModelPath = ""
+
+        let args = config.buildArguments()
+        XCTAssertTrue(args.contains("--mtp"))
+        XCTAssertFalse(args.contains("--mtp-model"))
+        XCTAssertFalse(args.contains("--mtp-draft"))
+    }
+
+    func testBuildArgumentsUsesEmbeddedMtpRegardlessOfExternalMtpToggle() {
+        var config = makeBaseConfig()
+        config.enableMtp = false
+        config.useEmbeddedMtp = true
+
+        let args = config.buildArguments()
+        XCTAssertTrue(args.contains("--mtp"))
+        XCTAssertFalse(args.contains("--mtp-model"))
     }
 
     func testBuildArgumentsIncludesSsdStreamingOptions() {

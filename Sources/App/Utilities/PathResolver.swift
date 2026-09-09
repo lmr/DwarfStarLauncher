@@ -39,7 +39,8 @@ enum PathResolver {
     }
 
     /// Dedicated storage locations keep main models, MTP models, and vision
-    /// encoders separate while sharing one user-configurable parent directory.
+    /// encoders separate while sharing one user-configurable parent
+    /// directory.
     static func modelsDirectory(for kind: ModelStorageKind) -> URL {
         let url = modelsDir.appendingPathComponent(kind.rawValue, isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: nil)

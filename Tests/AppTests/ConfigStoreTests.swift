@@ -18,6 +18,7 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertEqual(config.host, "127.0.0.1")
         XCTAssertEqual(config.port, 1234)
         XCTAssertTrue(config.enableMtp)
+        XCTAssertFalse(config.useEmbeddedMtp)
     }
 
     func testConcurrentReadModifyWriteUpdatesRemainValidAndComplete() throws {

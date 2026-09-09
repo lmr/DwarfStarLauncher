@@ -6,7 +6,7 @@ import HuggingFaceDownloader
 // MARK: - Settings Groups
 
 enum SettingsGroup: String, CaseIterable, Identifiable {
-    case model, vision, mtp, server, advanced, ds4, interface
+    case model, vision, mtp, qwen, server, advanced, ds4, interface
 
     var id: Self { self }
 
@@ -15,6 +15,7 @@ enum SettingsGroup: String, CaseIterable, Identifiable {
         case .model: return "Model"
         case .vision: return "Vision"
         case .mtp: return "MTP"
+        case .qwen: return "Qwen3.8"
         case .server: return "Server"
         case .advanced: return "Advanced"
         case .ds4: return "DS4 Build"
@@ -27,6 +28,7 @@ enum SettingsGroup: String, CaseIterable, Identifiable {
         case .model: return "cpu"
         case .vision: return "eye"
         case .mtp: return "bolt.fill"
+        case .qwen: return "tablecells"
         case .server: return "network"
         case .advanced: return "slider.horizontal.3"
         case .ds4: return "shippingbox"
@@ -58,6 +60,7 @@ struct ConfigOverlayView: View {
     @State private var localHfToken: String? = nil
     @State private var localMtpModelPath = ""
     @State private var localEnableMtp = true
+    @State private var localUseEmbeddedMtp = false
     @State private var localContextSize = 262144
     @State private var localPower = 100.0
     @State private var localHost = "127.0.0.1"
@@ -80,6 +83,7 @@ struct ConfigOverlayView: View {
         localHfToken = config.hfToken
         localMtpModelPath = config.mtpModelPath
         localEnableMtp = config.enableMtp
+        localUseEmbeddedMtp = config.useEmbeddedMtp
         localContextSize = config.contextSize
         localPower = Double(config.power)
         localHost = config.host
@@ -109,6 +113,8 @@ struct ConfigOverlayView: View {
                     visionSection
                 case .mtp:
                     mtpSection
+                case .qwen:
+                    qwenSection
                 case .server:
                     serverSection
                 case .advanced:
@@ -263,10 +269,25 @@ struct ConfigOverlayView: View {
                     .labelsHidden()
                     .onChange(of: localEnableMtp) { debouncedPersist() }
             } label: {
-                rowLabel("Enable MTP", caption: "Use multi-token prediction for faster inference")
+                rowLabel("Enable External MTP", caption: "Use an external MTP support GGUF for DeepSeek/DSpark")
             }
         } header: {
-            Text("MTP (Multi-Token Predict)")
+            Text("External MTP (Multi-Token Predict)")
+        }
+    }
+
+    private var qwenSection: some View {
+        Section {
+            LabeledContent {
+                Toggle("", isOn: $localUseEmbeddedMtp)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .onChange(of: localUseEmbeddedMtp) { debouncedPersist() }
+            } label: {
+                rowLabel("Embedded MTP", caption: "Pass --mtp for Qwen3.8 models with MTP weights in the main GGUF")
+            }
+        } header: {
+            Text("Qwen3.8-Flash-Next")
         }
     }
 
@@ -458,6 +479,7 @@ struct ConfigOverlayView: View {
         config.hfToken = localHfToken
         config.mtpModelPath = localMtpModelPath
         config.enableMtp = localEnableMtp
+        config.useEmbeddedMtp = localUseEmbeddedMtp
         config.contextSize = localContextSize
         config.power = Int(localPower)
         config.host = localHost

@@ -67,12 +67,14 @@ final class ServerManager {
         }
 
         var launchConfig = config
-        if launchConfig.enableMtp {
+        if launchConfig.enableMtp && !launchConfig.useEmbeddedMtp {
             let mtpPath = (launchConfig.mtpModelPath as NSString).expandingTildeInPath
             if !FileManager.default.fileExists(atPath: mtpPath) {
                 let warning = "Warning: MTP model not found at \(mtpPath); starting without MTP."
                 appendLogLine(LogLine(timestamp: Date(), text: warning, level: .warning))
                 launchConfig.enableMtp = false
+            } else {
+                launchConfig.mtpModelPath = mtpPath
             }
         }
 
