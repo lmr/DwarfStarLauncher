@@ -20,10 +20,9 @@ jobs:
       - name: Install create-dmg
         run: brew install create-dmg
 
-      - name: Build release binary
-        run: swift build -c release
-
       - name: Package .app bundle
+        # package.sh builds the release binary itself; no separate build step
+        # needed (avoids building the same configuration three times).
         run: bash scripts/package.sh
 
       - name: Create DMG
