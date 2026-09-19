@@ -175,6 +175,7 @@ struct ConfigOverlayView: View {
         Section {
             ModelPickerView(path: $localModelPath)
                 .environment(modelManager)
+                .onChange(of: localModelPath) { debouncedPersist() }
 
             LabeledContent {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -253,6 +254,7 @@ struct ConfigOverlayView: View {
         Section {
             MtpModelPickerView(path: $localMtpModelPath)
                 .environment(modelManager)
+                .onChange(of: localMtpModelPath) { debouncedPersist() }
 
             LabeledContent {
                 Text(PathResolver.mtpModelsDir.path)
