@@ -55,6 +55,28 @@ final class ServerManager {
         }
     }
 
+    /// Persists the current model-path selections with a field merge, leaving
+    /// every other key in the file untouched. Used when paths change outside
+    /// Settings (e.g. a finished download auto-wires the model): a full
+    /// `save(config)` here could clobber fields owned by other writers
+    /// (hfToken, importPath) that are newer on disk than this in-memory copy.
+    func persistModelPaths() {
+        let config = self.config
+        do {
+            try configStore.updateJSONObject { object in
+                object["modelPath"] = config.modelPath
+                object["mtpModelPath"] = config.mtpModelPath
+                if let visionEncoderPath = config.visionEncoderPath {
+                    object["visionEncoderPath"] = visionEncoderPath
+                } else {
+                    object.removeValue(forKey: "visionEncoderPath")
+                }
+            }
+        } catch {
+            onError?("Failed to save model selection: \(error.localizedDescription)")
+        }
+    }
+
     func spawn(config: ServerConfig) {
         guard process == nil else { return }
         restartTask?.cancel()

@@ -154,6 +154,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             Self.sharedServerManager.config.visionEncoderPath = modelPath
             Self.sharedModelManager.selectVisionModel(byPath: modelPath)
         }
+        // Effect 3 — persist the wired paths with a field merge so unrelated
+        // keys owned by other writers (token, import path) survive.
+        Self.sharedServerManager.persistModelPaths()
     }
 
     private func handleDownloadError(_ message: String) {

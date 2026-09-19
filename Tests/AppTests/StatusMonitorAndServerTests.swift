@@ -187,8 +187,60 @@ final class ServerManagerTests: XCTestCase {
         XCTAssertEqual(manager.logLines.first?.text, "line 2000")
     }
 
-    func testMissingBinaryProducesActionableError() {
+    func testPersistModelPathsMergesWithoutClobberingOtherKeys() throws {
         let configURL = appMakeTempDirectory().appendingPathComponent("config.json")
+        let store = ConfigStore(fileURL: configURL)
+        // Initial file, as written by a previous full Settings save.
+        try store.updateJSONObject { object in
+            object["modelPath"] = "/models/old.gguf"
+            object["hfToken"] = "token-old"
+            object["importPath"] = "/tmp/ds4"
+            object["port"] = 9999
+        }
+
+        let manager = ServerManager(
+            statusMonitor: StatusMonitor(),
+            configStore: store
+        )
+        // Another owner (token store) writes a newer token to disk that this
+        // in-memory copy never sees — the stale-copy hazard a blind full
+        // save would turn into silent token loss.
+        try store.updateJSONObject { object in
+            object["hfToken"] = "token-new"
+        }
+
+        manager.config.modelPath = "/models/main.gguf"
+        manager.config.mtpModelPath = "/models/mtp.gguf"
+        manager.config.visionEncoderPath = "/models/mmproj.gguf"
+
+        var reportedMessage: String?
+        manager.onError = { reportedMessage = $0 }
+        manager.persistModelPaths()
+
+        XCTAssertNil(reportedMessage)
+        let reloaded = store.load(ServerConfig.self)
+        XCTAssertEqual(reloaded?.modelPath, "/models/main.gguf")
+        XCTAssertEqual(reloaded?.mtpModelPath, "/models/mtp.gguf")
+        XCTAssertEqual(reloaded?.visionEncoderPath, "/models/mmproj.gguf")
+        // Other owners' fields survive the merge — especially the newer token.
+        XCTAssertEqual(reloaded?.hfToken, "token-new")
+        XCTAssertEqual(reloaded?.importPath, "/tmp/ds4")
+        XCTAssertEqual(reloaded?.port, 9999)
+
+        // Clearing the vision path removes its key without touching the rest.
+        manager.config.visionEncoderPath = nil
+        manager.persistModelPaths()
+
+        XCTAssertNil(reportedMessage)
+        let raw = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: configURL)
+        ) as? [String: Any]
+        XCTAssertNil(raw?["visionEncoderPath"])
+        XCTAssertEqual(raw?["hfToken"] as? String, "token-new")
+        XCTAssertEqual(store.load(ServerConfig.self)?.modelPath, "/models/main.gguf")
+    }
+
+    func testMissingBinaryProducesActionableError() {        let configURL = appMakeTempDirectory().appendingPathComponent("config.json")
         let manager = ServerManager(
             statusMonitor: StatusMonitor(),
             configStore: ConfigStore(fileURL: configURL),
