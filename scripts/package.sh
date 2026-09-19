@@ -10,14 +10,24 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
 echo "==> Building release..."
+# Default build system on Xcode 16+ / macOS 27 is swiftbuild.
+# Do NOT pass --build-system native (deprecated): it writes to a different
+# output dir (.build/<triple>/release) than swiftbuild
+# (.build/out/Products/Release), which diverges from `swift run`/`swift build`.
 swift build -c release
 
-# Determine the build output path
-TRIPLE=$(swift build --show-destination 2>/dev/null | tr -d '\n')
-if [ -z "$TRIPLE" ]; then
-  TRIPLE="arm64-apple-macosx"
+# Resolve the binary path from the active build system.
+BIN_DIR="$(swift build -c release --show-bin-path 2>/dev/null | tr -d '\n')"
+EXE="${BIN_DIR}/App"
+
+if [ ! -f "$EXE" ]; then
+  # Fallback for older toolchains without --show-bin-path.
+  TRIPLE=$(swift build --show-destination 2>/dev/null | tr -d '\n')
+  if [ -z "$TRIPLE" ]; then
+    TRIPLE="arm64-apple-macosx"
+  fi
+  EXE=".build/${TRIPLE}/release/App"
 fi
-EXE=".build/${TRIPLE}/release/App"
 
 if [ ! -f "$EXE" ]; then
   echo "Error: Build output not found at $EXE"
